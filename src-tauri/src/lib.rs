@@ -1,4 +1,5 @@
 pub mod brew;
+pub mod commands;
 pub mod detect;
 pub mod health;
 pub mod model;
@@ -33,7 +34,21 @@ fn toggle_popover(app: &tauri::AppHandle) {
 pub fn run() {
 	tauri::Builder::default()
 		.plugin(tauri_plugin_positioner::init())
+		.invoke_handler(tauri::generate_handler![
+			commands::get_items,
+			commands::add_item,
+			commands::update_item,
+			commands::delete_item,
+			commands::reorder,
+			commands::toggle_favorite,
+			commands::detect_folder_cmd,
+			commands::get_settings,
+			commands::update_settings,
+		])
 		.setup(|app| {
+			let dir = store::config_dir()?;
+			app.manage(commands::init_state(dir));
+
 			TrayIconBuilder::new()
 				.icon(app.default_window_icon().unwrap().clone())
 				.on_tray_icon_event(|tray, event| {
