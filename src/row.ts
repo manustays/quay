@@ -12,10 +12,16 @@ import { openForm } from './form';
  *
  * @param item - The managed service item to render.
  * @param status - Current live status of the item.
+ * @param lastError - Last error message for the item, shown as a tooltip on the error dot.
  * @param onChange - Callback to trigger a full list re-render after any mutation.
  * @returns A `div.row` HTMLElement ready to insert into the DOM.
  */
-export function renderRow(item: ManagedItem, status: Status, onChange: () => void): HTMLElement {
+export function renderRow(
+	item: ManagedItem,
+	status: Status,
+	lastError: string | undefined,
+	onChange: () => void,
+): HTMLElement {
 	const row = document.createElement('div');
 	row.className = 'row';
 
@@ -29,6 +35,10 @@ export function renderRow(item: ManagedItem, status: Status, onChange: () => voi
 	const dotEl = document.createElement('span');
 	dotEl.className = `dot ${dotCls}`;
 	dotEl.textContent = dotGlyph;
+	// Surface the last error message as a tooltip on error-state rows.
+	if (status === 'error' && lastError) {
+		dotEl.title = lastError;
+	}
 
 	const nameEl = document.createElement('span');
 	nameEl.className = 'name';

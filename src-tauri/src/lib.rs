@@ -10,6 +10,7 @@ pub mod terminal;
 
 use tauri::{
 	Manager,
+	menu::{MenuBuilder, MenuItemBuilder},
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 	WindowEvent,
 };
@@ -53,6 +54,7 @@ pub fn run() {
 			commands::open_terminal,
 			commands::tail_log,
 			commands::list_brew_formulae,
+			commands::set_suppress_hide,
 		])
 		.setup(|app| {
 			let dir = store::config_dir()?;
@@ -74,8 +76,15 @@ pub fn run() {
 				}
 			}
 
+			// Build a tray context menu with a single "Quit" item.
+			let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
+			let tray_menu = MenuBuilder::new(app).items(&[&quit]).build()?;
+
 			TrayIconBuilder::new()
 				.icon(app.default_window_icon().unwrap().clone())
+				.menu(&tray_menu)
+				// Only show the context menu on right-click; left-click toggles the popover.
+				.show_menu_on_left_click(false)
 				.on_tray_icon_event(|tray, event| {
 					tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
 					if let TrayIconEvent::Click {
@@ -87,13 +96,38 @@ pub fn run() {
 						toggle_popover(tray.app_handle());
 					}
 				})
+				.on_menu_event(|app, event| {
+					if event.id().as_ref() == "quit" {
+						// Drain running children, drop the lock, then stop each one
+						// so we don't hold the mutex across a blocking stop call.
+						let children: Vec<_> = {
+							let st = app.state::<state::AppState>();
+							let mut map = st.running.lock().unwrap();
+							map.drain().collect()
+						};
+						for (_, mut r) in children {
+							let _ = supervisor::stop(&mut r);
+						}
+						app.exit(0);
+					}
+				})
 				.build(app)?;
 			Ok(())
 		})
 		.on_window_event(|window, event| {
 			// Hide the popover when it loses focus (menubar-app behavior).
+			// Gate on the "main" window only, and skip if a native dialog is open.
 			if let WindowEvent::Focused(false) = event {
-				let _ = window.hide();
+				if window.label() == "main" {
+					let suppress = window
+						.app_handle()
+						.state::<state::AppState>()
+						.suppress_hide
+						.load(std::sync::atomic::Ordering::Relaxed);
+					if !suppress {
+						let _ = window.hide();
+					}
+				}
 			}
 		})
 		.build(tauri::generate_context!())

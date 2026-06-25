@@ -3,6 +3,7 @@ use crate::supervisor::Running;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
+use std::sync::atomic::AtomicBool;
 
 /// All shared, mutable app state behind locks.
 pub struct AppState {
@@ -11,4 +12,7 @@ pub struct AppState {
 	pub running: Mutex<HashMap<String, Running>>,
 	pub statuses: Mutex<HashMap<String, Status>>,
 	pub errors: Mutex<HashMap<String, String>>,
+	/// When `true`, the `Focused(false)` window-event handler skips hiding the
+	/// popover. Set while a native dialog (e.g. folder picker) is open.
+	pub suppress_hide: AtomicBool,
 }

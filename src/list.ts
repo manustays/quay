@@ -19,12 +19,14 @@ interface ListOpts {
  * @param container - The root element to render into (cleared on each call).
  * @param items - Full list of managed items from the backend.
  * @param statuses - Live status map keyed by item id.
+ * @param lastErrors - Last error message map keyed by item id.
  * @param opts - Callbacks for mutations, add-item, and open-settings.
  */
 export function renderList(
 	container: HTMLElement,
 	items: ManagedItem[],
 	statuses: Map<string, Status>,
+	lastErrors: Map<string, string>,
 	opts: ListOpts,
 ): void {
 	container.replaceChildren();
@@ -69,19 +71,25 @@ export function renderList(
 			sectionHeader.className = 'section';
 			sectionHeader.textContent = 'FAVORITES';
 			body.appendChild(sectionHeader);
-			favorites.forEach(i => body.appendChild(renderRow(i, statusOf(i), opts.onChange)));
+			favorites.forEach(i => body.appendChild(
+				renderRow(i, statusOf(i), lastErrors.get(i.id), opts.onChange),
+			));
 		}
 
 		if (others.length) {
 			if (q) {
 				// When searching, show all matches flat (no collapse).
-				others.forEach(i => body.appendChild(renderRow(i, statusOf(i), opts.onChange)));
+				others.forEach(i => body.appendChild(
+					renderRow(i, statusOf(i), lastErrors.get(i.id), opts.onChange),
+				));
 			} else {
 				const more = document.createElement('details');
 				const sum = document.createElement('summary');
 				sum.textContent = `More (${others.length})`;
 				more.appendChild(sum);
-				others.forEach(i => more.appendChild(renderRow(i, statusOf(i), opts.onChange)));
+				others.forEach(i => more.appendChild(
+					renderRow(i, statusOf(i), lastErrors.get(i.id), opts.onChange),
+				));
 				body.appendChild(more);
 			}
 		}

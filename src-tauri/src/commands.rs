@@ -110,7 +110,14 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		running: std::sync::Mutex::new(std::collections::HashMap::new()),
 		statuses: std::sync::Mutex::new(std::collections::HashMap::new()),
 		errors: std::sync::Mutex::new(std::collections::HashMap::new()),
+		suppress_hide: std::sync::atomic::AtomicBool::new(false),
 	}
+}
+
+/// Suppress (or re-enable) hide-on-blur, e.g. while a native dialog is open.
+#[tauri::command]
+pub fn set_suppress_hide(state: tauri::State<AppState>, value: bool) {
+	state.suppress_hide.store(value, std::sync::atomic::Ordering::Relaxed);
 }
 
 // ── Start / stop commands ────────────────────────────────────────────────────
@@ -176,8 +183,13 @@ pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
 	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
 	if let ItemKind::Brew = item.kind {
 		if let Some(f) = &item.brew_formula { brew::brew_stop(f)?; }
-	} else if let Some(mut r) = state.running.lock().unwrap().remove(&id) {
-		supervisor::stop(&mut r)?;
+	} else {
+		// Take the entry out under a scoped lock, then stop after the guard drops
+		// so the mutex is never held across the (potentially blocking) stop call.
+		let taken = { state.running.lock().unwrap().remove(&id) };
+		if let Some(mut r) = taken {
+			supervisor::stop(&mut r)?;
+		}
 	}
 	set_status(&app, &id, Status::Stopped);
 	Ok(())

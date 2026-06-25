@@ -33,3 +33,10 @@ export const listBrewFormulae = () => invoke<string[]>('list_brew_formulae');
 export function onStatusChanged(cb: (s: ItemStatus) => void): Promise<UnlistenFn> {
 	return listen<ItemStatus>('status_changed', (e) => cb(e.payload));
 }
+
+/**
+ * Suppress (or re-enable) hide-on-blur in the Rust backend.
+ * Call with `true` before opening a native dialog and `false` in a `finally`
+ * block after it closes, so the popover stays visible during the pick flow.
+ */
+export const setSuppressHide = (value: boolean) => invoke<void>('set_suppress_hide', { value });

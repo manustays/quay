@@ -1,5 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { addItem, updateItem, detectFolder, listBrewFormulae } from './ipc';
+import { addItem, updateItem, detectFolder, listBrewFormulae, setSuppressHide } from './ipc';
 import type { ManagedItem, ItemKind, RunMode } from './model';
 
 /** Return a blank ManagedItem for the add-new flow. */
@@ -150,8 +150,16 @@ export function openForm(item: ManagedItem | null, onDone: () => void): void {
 	void applyKindUI(data.kind);
 
 	// Pick folder → detectFolder → prefill name/kind/startCmd/port.
+	// Suppress hide-on-blur while the native dialog is open so the popover
+	// doesn't disappear mid-flow when the window loses focus to the OS dialog.
 	$el<HTMLButtonElement>('#f-pick').onclick = async () => {
-		const picked = await open({ directory: true });
+		await setSuppressHide(true);
+		let picked: string | string[] | null;
+		try {
+			picked = await open({ directory: true });
+		} finally {
+			await setSuppressHide(false);
+		}
 		if (typeof picked !== 'string') return;
 		const det = await detectFolder(picked);
 		// Preserve a user-supplied name; otherwise use detected name.
