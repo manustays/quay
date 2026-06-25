@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ManagedItem, Settings, ItemStatus } from './model';
+import type { ManagedItem, Settings, ItemStatus, DetectResult } from './model';
 
 export const getItems = () => invoke<ManagedItem[]>('get_items');
 export const addItem = (item: ManagedItem) => invoke<ManagedItem>('add_item', { item });
@@ -14,7 +14,7 @@ export const stopAll = () => invoke<void>('stop_all');
 export const openBrowser = (id: string) => invoke<void>('open_browser', { id });
 export const openTerminal = (id: string) => invoke<void>('open_terminal', { id });
 export const tailLog = (id: string, lines: number) => invoke<string>('tail_log', { id, lines });
-export const detectFolder = (path: string) => invoke<string>('detect_folder_cmd', { path });
+export const detectFolder = (path: string) => invoke<DetectResult>('detect_folder_cmd', { path });
 export const getSettings = () => invoke<Settings>('get_settings');
 export const updateSettings = (settings: Settings) => invoke<void>('update_settings', { settings });
 

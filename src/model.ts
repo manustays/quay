@@ -49,6 +49,14 @@ export interface ItemStatus {
 	lastError: string | null;
 }
 
+/** Suggested item config returned by the detect_folder_cmd backend command. Mirrors Rust `DetectResult`. */
+export interface DetectResult {
+	name: string;
+	kind: ItemKind;
+	startCmd: string | null;
+	port: number | null;
+}
+
 /**
  * Return a glyph + CSS class string for a given status.
  * Each string contains the status name so callers can test with `.toContain`.
