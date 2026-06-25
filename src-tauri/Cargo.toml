@@ -28,4 +28,5 @@ uuid = { version = "1", features = ["v4"] }
 libc = "0.2"
 ureq = "3.3.0"
 tauri-plugin-dialog = "2.7.1"
+tauri-plugin-autostart = "2.5.1"
 
