@@ -52,6 +52,7 @@ pub fn run() {
 			commands::open_browser,
 			commands::open_terminal,
 			commands::tail_log,
+			commands::list_brew_formulae,
 		])
 		.setup(|app| {
 			let dir = store::config_dir()?;

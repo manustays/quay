@@ -227,3 +227,16 @@ pub fn tail_log(app: AppHandle, id: String, lines: usize) -> Result<String, AppE
 	let tail: Vec<&str> = text.lines().rev().take(lines).collect();
 	Ok(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
 }
+
+/// List formula names known to `brew services`.
+///
+/// Runs `brew services list`, parses the output via `brew::parse_brew_list`, and
+/// returns only the formula name keys. Returns an empty vec if brew is unavailable.
+#[tauri::command]
+pub fn list_brew_formulae() -> Vec<String> {
+	let Ok(out) = std::process::Command::new("brew").args(["services", "list"]).output() else {
+		return vec![];
+	};
+	let text = String::from_utf8_lossy(&out.stdout);
+	brew::parse_brew_list(&text).into_keys().collect()
+}

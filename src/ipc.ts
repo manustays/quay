@@ -19,6 +19,12 @@ export const getSettings = () => invoke<Settings>('get_settings');
 export const updateSettings = (settings: Settings) => invoke<void>('update_settings', { settings });
 
 /**
+ * List formula names known to `brew services`.
+ * Returns an empty array when Homebrew is unavailable.
+ */
+export const listBrewFormulae = () => invoke<string[]>('list_brew_formulae');
+
+/**
  * Subscribe to backend status-changed events.
  * The callback receives an {@link ItemStatus} payload each time a service
  * transitions state. Returns a Promise that resolves to an unlisten function —

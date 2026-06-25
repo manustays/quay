@@ -1,5 +1,5 @@
 import { open } from '@tauri-apps/plugin-dialog';
-import { addItem, updateItem, detectFolder } from './ipc';
+import { addItem, updateItem, detectFolder, listBrewFormulae } from './ipc';
 import type { ManagedItem, ItemKind, RunMode } from './model';
 
 /** Return a blank ManagedItem for the add-new flow. */
@@ -76,7 +76,7 @@ export function openForm(item: ManagedItem | null, onDone: () => void): void {
 					<option value="agent">agent</option>
 				</select>
 			</label>
-			<label>Folder <input id="f-dir" readonly><button id="f-pick">Pick…</button></label>
+			<label id="f-dir-row">Folder <input id="f-dir" readonly><button id="f-pick">Pick…</button></label>
 			<label>Start cmd <input id="f-cmd"></label>
 			<label>Stop cmd <input id="f-stop"></label>
 			<label>Port <input id="f-port" type="number"></label>
@@ -86,7 +86,7 @@ export function openForm(item: ManagedItem | null, onDone: () => void): void {
 					<option value="terminal">terminal</option>
 				</select>
 			</label>
-			<label>Brew formula <input id="f-formula"></label>
+			<label>Brew formula <input id="f-formula" list="f-formula-list"><datalist id="f-formula-list"></datalist></label>
 			<label>Env (KEY=VALUE per line) <textarea id="f-env"></textarea></label>
 			<label>Health path <input id="f-health" placeholder="/health"></label>
 			<label><input type="checkbox" id="f-fav"> Favorite</label>
@@ -119,6 +119,35 @@ export function openForm(item: ManagedItem | null, onDone: () => void): void {
 	};
 
 	fill(data);
+
+	/**
+	 * Update visibility and datalist whenever the kind selection changes.
+	 * Brew items need no folder; populate the formula datalist from brew services.
+	 *
+	 * @param kind - The newly selected item kind.
+	 */
+	const applyKindUI = async (kind: string): Promise<void> => {
+		const dirRow = $el<HTMLLabelElement>('#f-dir-row');
+		const datalist = $el<HTMLDataListElement>('#f-formula-list');
+		if (kind === 'brew') {
+			dirRow.style.display = 'none';
+			const formulae = await listBrewFormulae();
+			datalist.innerHTML = formulae
+				.map((f) => `<option value="${f}"></option>`)
+				.join('');
+		} else {
+			dirRow.style.display = '';
+			datalist.innerHTML = '';
+		}
+	};
+
+	// Trigger datalist population and dir-row visibility on kind change.
+	$el<HTMLSelectElement>('#f-kind').onchange = async () => {
+		await applyKindUI($el<HTMLSelectElement>('#f-kind').value);
+	};
+
+	// Apply initial state based on the kind already loaded into the form.
+	void applyKindUI(data.kind);
 
 	// Pick folder → detectFolder → prefill name/kind/startCmd/port.
 	$el<HTMLButtonElement>('#f-pick').onclick = async () => {
