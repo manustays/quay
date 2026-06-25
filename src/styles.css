@@ -13,3 +13,8 @@ body { margin: 0; font: 13px -apple-system, system-ui, sans-serif; }
 .actions button, .footer button, .header button { font-size: 11px; }
 .expand { padding: 6px 8px; background: #f6f6f6; }
 .log { max-height: 140px; overflow: auto; font: 10px monospace; white-space: pre-wrap; }
+
+.overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.3); display: flex; align-items: center; justify-content: center; }
+.modal { background: #fff; padding: 12px; width: 320px; max-height: 90vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; border-radius: 8px; }
+.modal label { display: flex; flex-direction: column; font-size: 11px; gap: 2px; }
+.modal-actions { display: flex; justify-content: flex-end; gap: 6px; margin-top: 8px; }

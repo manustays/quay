@@ -1,5 +1,6 @@
 import { statusDot, type ManagedItem, type Status } from './model';
 import { startItem, stopItem, openBrowser, openTerminal, toggleFavorite, deleteItem, tailLog } from './ipc';
+import { openForm } from './form';
 
 /**
  * Render a single item row element.
@@ -93,7 +94,14 @@ export function renderRow(item: ManagedItem, status: Status, onChange: () => voi
 			}
 		};
 
-		panel.append(fav, del);
+		const edit = document.createElement('button');
+		edit.textContent = 'Edit';
+		edit.onclick = (e: MouseEvent) => {
+			e.stopPropagation();
+			openForm(item, onChange);
+		};
+
+		panel.append(edit, fav, del);
 		row.appendChild(panel);
 	};
 
