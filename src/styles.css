@@ -1,2 +1,15 @@
 body { margin: 0; font: 13px -apple-system, system-ui, sans-serif; }
 .popover { padding: 10px; }
+
+.header, .footer { display: flex; gap: 6px; padding: 6px; align-items: center; }
+.search { flex: 1; }
+.section { font-size: 10px; color: #888; padding: 4px 8px; }
+.row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; cursor: default; }
+.row:hover { background: rgba(0,0,0,0.05); }
+.name { flex: 1; font-weight: 500; }
+.meta { color: #888; font-size: 11px; }
+.dot.running { color: #2ecc40; } .dot.starting { color: #ffdc00; }
+.dot.stopped { color: #aaa; } .dot.error { color: #ff4136; }
+.actions button, .footer button, .header button { font-size: 11px; }
+.expand { padding: 6px 8px; background: #f6f6f6; }
+.log { max-height: 140px; overflow: auto; font: 10px monospace; white-space: pre-wrap; }

@@ -1,1 +1,36 @@
-document.querySelector('#app')!.innerHTML = `<div class="popover"><h1>Services</h1><p>No items yet.</p></div>`;
+import { getItems, onStatusChanged } from './ipc';
+import { renderList } from './list';
+import { openForm } from './form';
+import { openSettings } from './settings';
+import type { ManagedItem, Status } from './model';
+
+const app = document.querySelector<HTMLDivElement>('#app')!;
+const statuses = new Map<string, Status>();
+let items: ManagedItem[] = [];
+
+/**
+ * Reload all items from the backend and re-render the list.
+ * Called on startup and after any mutation (add, delete, start, stop, etc.).
+ */
+async function refresh(): Promise<void> {
+	items = await getItems();
+	render();
+}
+
+/** Re-render the list with the current `items` and `statuses` snapshots. */
+function render(): void {
+	renderList(app, items, statuses, {
+		onChange: refresh,
+		onAdd: () => openForm(null, refresh),
+		onSettings: () => openSettings(refresh),
+	});
+}
+
+// Subscribe to live status events from the backend — update the map and re-render
+// without hitting the backend (statuses arrive as push events, not polled).
+onStatusChanged((s) => {
+	statuses.set(s.id, s.status);
+	render();
+});
+
+refresh();
