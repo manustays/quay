@@ -1,3 +1,5 @@
+pub mod model;
+
 use tauri::{
 	Manager,
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
