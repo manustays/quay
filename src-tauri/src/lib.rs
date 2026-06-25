@@ -1,3 +1,4 @@
+pub mod brew;
 pub mod detect;
 pub mod model;
 pub mod store;
