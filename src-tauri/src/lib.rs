@@ -2,6 +2,7 @@ pub mod brew;
 pub mod detect;
 pub mod model;
 pub mod store;
+pub mod supervisor;
 
 use tauri::{
 	Manager,
