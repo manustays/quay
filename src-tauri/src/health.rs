@@ -39,6 +39,78 @@ pub fn http_ok(port: u16, path: &str) -> bool {
 	}
 }
 
+// ── Poll loop ────────────────────────────────────────────────────────────────
+
+use crate::commands::set_status;
+use crate::model::{ItemKind, RunMode};
+use crate::state::AppState;
+use tauri::{AppHandle, Manager};
+
+/// Spawn a background thread that calls `poll_once` every `poll_interval_sec` seconds.
+pub fn spawn_poll_loop(app: AppHandle) {
+	std::thread::spawn(move || loop {
+		let interval = {
+			let st = app.state::<AppState>();
+			let secs = st.config.lock().unwrap().settings.poll_interval_sec.max(1);
+			secs
+		};
+		poll_once(&app);
+		std::thread::sleep(std::time::Duration::from_secs(interval));
+	});
+}
+
+/// One poll pass: compute each item's live status and call `set_status` on changes.
+///
+/// Skips non-brew items whose status is None or Stopped (never started).
+pub fn poll_once(app: &AppHandle) {
+	let state = app.state::<AppState>();
+	let items = state.config.lock().unwrap().items.clone();
+	for item in items {
+		let current = state.statuses.lock().unwrap().get(&item.id).copied();
+		if matches!(current, None | Some(Status::Stopped)) && !matches!(item.kind, ItemKind::Brew) {
+			continue; // never started; leave as-is
+		}
+		let status = match item.kind {
+			ItemKind::Brew => {
+				item.brew_formula.as_deref()
+					.map(crate::brew::brew_status)
+					.unwrap_or(Status::Stopped)
+			}
+			_ => match item.run_mode {
+				RunMode::Background => {
+					// Check liveness while holding the lock briefly, then release before blocking I/O.
+					let pid_alive: Option<bool> = {
+						let mut running = state.running.lock().unwrap();
+						running.get_mut(&item.id).map(|r| crate::supervisor::is_alive(r))
+					};
+					match pid_alive {
+						None => Status::Stopped,
+						Some(alive) => {
+							if !alive {
+								state.errors.lock().unwrap()
+									.insert(item.id.clone(), "process exited".into());
+							}
+							let has_port = item.port.is_some();
+							// Port/HTTP checks happen outside any lock (can block up to 500 ms).
+							let port_up = match (item.port, item.health_path.as_deref()) {
+								(Some(p), Some(path)) => http_ok(p, path),
+								(Some(p), None) => port_open(p),
+								_ => false,
+							};
+							decide_status(&Probe { pid_alive: alive, has_port, port_open: port_up })
+						}
+					}
+				}
+				RunMode::Terminal => match item.port {
+					Some(p) => if port_open(p) { Status::Running } else { Status::Starting },
+					None => current.unwrap_or(Status::Stopped),
+				},
+			},
+		};
+		set_status(app, &item.id, status);
+	}
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;

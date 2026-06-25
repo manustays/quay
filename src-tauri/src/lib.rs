@@ -44,10 +44,32 @@ pub fn run() {
 			commands::detect_folder_cmd,
 			commands::get_settings,
 			commands::update_settings,
+			commands::start_item,
+			commands::stop_item,
+			commands::stop_all,
+			commands::open_browser,
+			commands::open_terminal,
+			commands::tail_log,
 		])
 		.setup(|app| {
 			let dir = store::config_dir()?;
 			app.manage(commands::init_state(dir));
+
+			// Start the background status-poll loop.
+			health::spawn_poll_loop(app.handle().clone());
+
+			// Auto-start any items flagged with auto_start = true.
+			{
+				let app_handle = app.handle().clone();
+				let ids: Vec<String> = {
+					let st = app_handle.state::<state::AppState>();
+					let cfg = st.config.lock().unwrap();
+					cfg.items.iter().filter(|i| i.auto_start).map(|i| i.id.clone()).collect()
+				};
+				for id in ids {
+					let _ = commands::start_item(app_handle.clone(), id);
+				}
+			}
 
 			TrayIconBuilder::new()
 				.icon(app.default_window_icon().unwrap().clone())
@@ -71,6 +93,15 @@ pub fn run() {
 				let _ = window.hide();
 			}
 		})
-		.run(tauri::generate_context!())
-		.expect("error while running tauri application");
+		.build(tauri::generate_context!())
+		.expect("error building app")
+		.run(|app_handle, event| {
+			if let tauri::RunEvent::ExitRequested { .. } = event {
+				let st = app_handle.state::<state::AppState>();
+				let mut running = st.running.lock().unwrap();
+				for (_, r) in running.iter_mut() {
+					let _ = supervisor::stop(r);
+				}
+			}
+		});
 }

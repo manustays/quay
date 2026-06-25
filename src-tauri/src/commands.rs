@@ -112,3 +112,118 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		errors: std::sync::Mutex::new(std::collections::HashMap::new()),
 	}
 }
+
+// ── Start / stop commands ────────────────────────────────────────────────────
+
+use crate::model::{ItemKind, ItemStatus, RunMode, Status};
+use crate::{brew, supervisor, terminal};
+use tauri::{AppHandle, Emitter, Manager};
+
+/// Set an item's status and emit `status_changed` only if it changed.
+pub fn set_status(app: &AppHandle, id: &str, status: Status) {
+	let state = app.state::<AppState>();
+	let changed = {
+		let mut map = state.statuses.lock().unwrap();
+		map.insert(id.to_string(), status) != Some(status)
+	};
+	if changed {
+		let last_error = state.errors.lock().unwrap().get(id).cloned();
+		let _ = app.emit("status_changed", ItemStatus { id: id.to_string(), status, last_error });
+	}
+}
+
+/// Look up a `ManagedItem` by id in the current config.
+fn find_item(state: &AppState, id: &str) -> Option<ManagedItem> {
+	state.config.lock().unwrap().items.iter().find(|i| i.id == id).cloned()
+}
+
+/// Start a managed item; sets status to Starting (background) or Running (brew/terminal).
+#[tauri::command]
+pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
+	let state = app.state::<AppState>();
+	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
+	state.errors.lock().unwrap().remove(&id);
+	match item.kind {
+		ItemKind::Brew => {
+			let f = item.brew_formula.clone().ok_or_else(|| AppError::Message("no formula".into()))?;
+			brew::brew_start(&f)?;
+			set_status(&app, &id, Status::Running);
+		}
+		_ => match item.run_mode {
+			RunMode::Background => {
+				let logs = state.dir.join("logs");
+				std::fs::create_dir_all(&logs)?;
+				let running = supervisor::spawn_background(&item, &logs)?;
+				state.running.lock().unwrap().insert(id.clone(), running);
+				set_status(&app, &id, Status::Starting);
+			}
+			RunMode::Terminal => {
+				let dir = item.dir.clone().ok_or_else(|| AppError::Message("no dir".into()))?;
+				let cmd = item.start_cmd.clone().ok_or_else(|| AppError::Message("no cmd".into()))?;
+				let app_name = state.config.lock().unwrap().settings.terminal_app.clone();
+				terminal::run_in_terminal(&app_name, &dir, &item.env, &cmd)?;
+				set_status(&app, &id, Status::Running);
+			}
+		},
+	}
+	Ok(())
+}
+
+/// Stop a managed item and set its status to Stopped.
+#[tauri::command]
+pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
+	let state = app.state::<AppState>();
+	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
+	if let ItemKind::Brew = item.kind {
+		if let Some(f) = &item.brew_formula { brew::brew_stop(f)?; }
+	} else if let Some(mut r) = state.running.lock().unwrap().remove(&id) {
+		supervisor::stop(&mut r)?;
+	}
+	set_status(&app, &id, Status::Stopped);
+	Ok(())
+}
+
+/// Stop all running items (background + brew).
+#[tauri::command]
+pub fn stop_all(app: AppHandle) -> Result<(), AppError> {
+	let ids: Vec<String> = {
+		let state = app.state::<AppState>();
+		let running: Vec<String> = state.running.lock().unwrap().keys().cloned().collect();
+		let brews: Vec<String> = state.config.lock().unwrap().items.iter()
+			.filter(|i| matches!(i.kind, ItemKind::Brew)).map(|i| i.id.clone()).collect();
+		running.into_iter().chain(brews).collect()
+	};
+	for id in ids { let _ = stop_item(app.clone(), id); }
+	Ok(())
+}
+
+/// Open `http://localhost:<port>` in the system browser.
+#[tauri::command]
+pub fn open_browser(app: AppHandle, id: String) -> Result<(), AppError> {
+	let state = app.state::<AppState>();
+	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
+	let port = item.port.ok_or_else(|| AppError::Message("no port".into()))?;
+	std::process::Command::new("open").arg(format!("http://localhost:{port}")).spawn()
+		.map_err(|e| AppError::Message(e.to_string()))?;
+	Ok(())
+}
+
+/// Open a terminal window cd'd into the item's directory.
+#[tauri::command]
+pub fn open_terminal(app: AppHandle, id: String) -> Result<(), AppError> {
+	let state = app.state::<AppState>();
+	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
+	let dir = item.dir.clone().ok_or_else(|| AppError::Message("no dir".into()))?;
+	let app_name = state.config.lock().unwrap().settings.terminal_app.clone();
+	terminal::open_folder(&app_name, &dir)
+}
+
+/// Return the last `lines` lines from the item's log file (empty string if none).
+#[tauri::command]
+pub fn tail_log(app: AppHandle, id: String, lines: usize) -> Result<String, AppError> {
+	let state = app.state::<AppState>();
+	let path = state.dir.join("logs").join(format!("{id}.log"));
+	let text = std::fs::read_to_string(&path).unwrap_or_default();
+	let tail: Vec<&str> = text.lines().rev().take(lines).collect();
+	Ok(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+}
