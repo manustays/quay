@@ -29,10 +29,10 @@ Each module has a single responsibility:
 | Module | Responsibility |
 |--------|----------------|
 | `model` | Shared types: `ManagedItem`, `Settings`, `AppConfig`, `ItemKind`, `RunMode`, `Status`, `ItemStatus`, `AppError`. The serde representations are the contract with the frontend. |
-| `store` | Load/save `config.json` with an atomic temp-write + rename, and corrupt-file recovery (`config.bad.json` + defaults). |
+| `store` | Load/save `config.json` with an atomic temp-write + rename, and corrupt-file recovery (`config.bad.json` + defaults). Also persists the volatile `id → pid` map in `pids.json` for reattachment after an app restart. |
 | `detect` | Inspect a chosen folder (`package.json`, `requirements.txt`/`pyproject.toml`, `.env`) and suggest a name, start command, port, and kind. |
 | `brew` | Wrap `brew services start/stop/list` and parse the list output into per-formula statuses. |
-| `supervisor` | Spawn a background item via `zsh -lc "<cmd>"` in its **own process group** (`setsid`), redirect stdout/stderr to `logs/<id>.log`, and stop it by signalling the group (SIGTERM, escalating to SIGKILL). |
+| `supervisor` | Spawn a background item via `zsh -lc "<cmd>"` in its **own process group** (`setsid`), redirect stdout/stderr to `logs/<id>.log`, and stop it by signalling the group (SIGTERM, escalating to SIGKILL). Also **adopts** orphaned services across app restarts: `adopt` (handle-less, PID-only), `pids_listening`/`parse_lsof_pids` (find listeners via `lsof`), and `stop_port` (free a port by killing its listeners). See [process reattachment](process-reattach.md). |
 | `health` | The pure `decide_status` function (PID liveness × port/HTTP reachability → status), the TCP/HTTP probes, and the background poll loop that emits `status_changed`. |
 | `terminal` | Build the shell line and drive Terminal.app / iTerm2 via `osascript` (open a folder, or run a `terminal`-mode item). |
 | `state` | `AppState` — shared mutable state behind `Mutex`es: the loaded config, the map of running children, the status map, and the error map, plus a `suppress_hide` flag and the data dir. |

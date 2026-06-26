@@ -1,4 +1,5 @@
 use crate::model::{AppConfig, AppError};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Ensure and return the app's data directory, creating `logs/` subdirectory as well.
@@ -31,6 +32,28 @@ pub fn save_config(dir: &Path, cfg: &AppConfig) -> Result<(), AppError> {
 	Ok(())
 }
 
+// ── Runtime PID map (volatile; kept out of config.json) ───────────────────────
+
+/// Load the persisted `id → pid` map of background processes from `pids.json`.
+///
+/// Returns an empty map if the file is missing or unreadable/corrupt. These PIDs
+/// are runtime hints used to reattach to processes that outlived the app; identity
+/// is re-verified (alive + listening on the configured port) before adoption.
+pub fn load_pids(dir: &Path) -> HashMap<String, u32> {
+	let path = dir.join("pids.json");
+	let Ok(text) = std::fs::read_to_string(&path) else { return HashMap::new(); };
+	serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// Atomically persist the `id → pid` map as `pids.json` via temp file + rename.
+pub fn save_pids(dir: &Path, pids: &HashMap<String, u32>) -> Result<(), AppError> {
+	let tmp = dir.join("pids.json.tmp");
+	let text = serde_json::to_string_pretty(pids).map_err(|e| AppError::Message(e.to_string()))?;
+	std::fs::write(&tmp, text)?;
+	std::fs::rename(&tmp, dir.join("pids.json"))?;
+	Ok(())
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -54,6 +77,26 @@ mod tests {
 		std::fs::create_dir_all(&dir).unwrap();
 		let loaded = load_config(&dir);
 		assert_eq!(loaded.settings.poll_interval_sec, 3);
+		std::fs::remove_dir_all(&dir).ok();
+	}
+
+	#[test]
+	fn pids_save_then_load_roundtrips() {
+		let dir = std::env::temp_dir().join(format!("msm-test-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let mut pids = HashMap::new();
+		pids.insert("svc-a".to_string(), 4242u32);
+		pids.insert("svc-b".to_string(), 9001u32);
+		save_pids(&dir, &pids).unwrap();
+		assert_eq!(load_pids(&dir), pids);
+		std::fs::remove_dir_all(&dir).ok();
+	}
+
+	#[test]
+	fn missing_pids_yields_empty_map() {
+		let dir = std::env::temp_dir().join(format!("msm-test-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		assert!(load_pids(&dir).is_empty());
 		std::fs::remove_dir_all(&dir).ok();
 	}
 

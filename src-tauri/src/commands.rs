@@ -10,6 +10,19 @@ fn persist(state: &AppState) -> Result<(), AppError> {
 	store::save_config(&state.dir, &cfg)
 }
 
+/// Snapshot the live `id → pid` map and write it to `pids.json`.
+///
+/// Called after the `running` map changes so a relaunched app can reattach to
+/// processes that outlived it. The snapshot is taken under the lock, then the
+/// (blocking) file write happens after the guard drops.
+pub fn persist_pids(state: &AppState) {
+	let snapshot: std::collections::HashMap<String, u32> = {
+		let running = state.running.lock().unwrap();
+		running.iter().map(|(id, r)| (id.clone(), r.pid)).collect()
+	};
+	let _ = store::save_pids(&state.dir, &snapshot);
+}
+
 /// Return all registered items in their current order.
 #[tauri::command]
 pub fn get_items(state: State<AppState>) -> Vec<ManagedItem> {
@@ -139,9 +152,53 @@ pub fn set_status(app: &AppHandle, id: &str, status: Status) {
 	}
 }
 
+/// Return the current live status (and last error) of every tracked item.
+///
+/// `status_changed` events are only emitted on *change*, so a frontend that
+/// subscribes after the startup poll would otherwise miss the initial states.
+/// The frontend calls this once on mount to seed its status map.
+#[tauri::command]
+pub fn get_statuses(state: State<AppState>) -> Vec<ItemStatus> {
+	let statuses = state.statuses.lock().unwrap();
+	let errors = state.errors.lock().unwrap();
+	statuses
+		.iter()
+		.map(|(id, &status)| ItemStatus {
+			id: id.clone(),
+			status,
+			last_error: errors.get(id).cloned(),
+		})
+		.collect()
+}
+
 /// Look up a `ManagedItem` by id in the current config.
 fn find_item(state: &AppState, id: &str) -> Option<ManagedItem> {
 	state.config.lock().unwrap().items.iter().find(|i| i.id == id).cloned()
+}
+
+/// If `item`'s configured port already has a live listener we can identify, adopt
+/// that process (insert an adopted `Running`, persist pids, mark Running) and return
+/// `true`. Returns `false` when there is no port, nothing is listening, or no PID can
+/// be resolved — in which case the caller should spawn instead.
+///
+/// Liveness is a raw TCP check (`port_open`), not the HTTP health path: a socket in
+/// LISTEN state is the right signal for "something already owns this port", and it is
+/// not subject to a still-warming server returning non-2xx. We require a resolvable
+/// PID so the adopted entry is always tracked in the `running` map — an untracked
+/// "Running" item would be flipped back to Stopped by the next poll pass.
+///
+/// Shared by `start_item` and the launch-time port sweep. Caller must ensure the item
+/// is `RunMode::Background` (terminal/brew items must not enter the `running` map).
+pub fn adopt_if_listening(app: &AppHandle, item: &ManagedItem) -> bool {
+	let Some(p) = item.port else { return false; };
+	if !crate::health::port_open(p) { return false; }
+	let Some(pid) = supervisor::pids_listening(p).first().copied() else { return false; };
+	let state = app.state::<AppState>();
+	let log_path = state.dir.join("logs").join(format!("{}.log", item.id));
+	state.running.lock().unwrap().insert(item.id.clone(), supervisor::adopt(pid, log_path));
+	persist_pids(&state);
+	set_status(app, &item.id, Status::Running);
+	true
 }
 
 /// Start a managed item; sets status to Starting (background) or Running (brew/terminal).
@@ -158,10 +215,17 @@ pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
 		}
 		_ => match item.run_mode {
 			RunMode::Background => {
+				// If the configured port is already serving — e.g. a previous instance
+				// orphaned across an app restart — adopt it instead of spawning a
+				// duplicate that can't bind and would leave two processes behind.
+				if adopt_if_listening(&app, &item) {
+					return Ok(());
+				}
 				let logs = state.dir.join("logs");
 				std::fs::create_dir_all(&logs)?;
 				let running = supervisor::spawn_background(&item, &logs)?;
 				state.running.lock().unwrap().insert(id.clone(), running);
+				persist_pids(&state);
 				set_status(&app, &id, Status::Starting);
 			}
 			RunMode::Terminal => {
@@ -190,6 +254,15 @@ pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
 		if let Some(mut r) = taken {
 			supervisor::stop(&mut r)?;
 		}
+		// If a port is configured and something is still listening — an orphan we
+		// never owned, or a grandchild that escaped the process-group kill — free
+		// the port so the user isn't left with an unkillable background service.
+		if let Some(p) = item.port {
+			if crate::health::port_open(p) {
+				supervisor::stop_port(p);
+			}
+		}
+		persist_pids(&state);
 	}
 	set_status(&app, &id, Status::Stopped);
 	Ok(())

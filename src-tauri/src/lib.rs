@@ -47,6 +47,7 @@ pub fn run() {
 			commands::detect_folder_cmd,
 			commands::get_settings,
 			commands::update_settings,
+			commands::get_statuses,
 			commands::start_item,
 			commands::stop_item,
 			commands::stop_all,
@@ -59,6 +60,54 @@ pub fn run() {
 		.setup(|app| {
 			let dir = store::config_dir()?;
 			app.manage(commands::init_state(dir));
+
+			// Reattach to background services that outlived a previous app session
+			// (e.g. a crash, force-quit, or relaunch after sleep). For each persisted
+			// PID, adopt it only if the process is still alive AND — when a port is
+			// configured — that PID is actually listening on it, which guards against
+			// PID reuse pointing us at an unrelated process. Dead/mismatched entries
+			// are dropped when we rewrite pids.json at the end.
+			{
+				let app_handle = app.handle().clone();
+				let st = app_handle.state::<state::AppState>();
+				let pids = store::load_pids(&st.dir);
+				let items = st.config.lock().unwrap().items.clone();
+				for (id, pid) in &pids {
+					let Some(item) = items.iter().find(|i| &i.id == id) else { continue; };
+					let alive = unsafe { libc::kill(*pid as i32, 0) == 0 };
+					if !alive { continue; }
+					let identity_ok = match item.port {
+						Some(p) => supervisor::pids_listening(p).contains(pid),
+						None => true, // portless: best-effort liveness only
+					};
+					if !identity_ok { continue; }
+					let log_path = st.dir.join("logs").join(format!("{id}.log"));
+					st.running.lock().unwrap().insert(id.clone(), supervisor::adopt(*pid, log_path));
+					commands::set_status(&app_handle, id, model::Status::Running);
+				}
+
+				// Port sweep: for background items not already reattached above, probe
+				// the configured port once and adopt any live listener — so services
+				// started outside the app (or after pids.json was cleared on a clean
+				// quit) show Running on launch without a manual Start. Background-only
+				// (terminal/brew items must not enter the running map), and each port is
+				// claimed once so two items sharing a port can't both adopt the same
+				// listener.
+				let mut claimed_ports = std::collections::HashSet::new();
+				for item in &items {
+					if !matches!(item.run_mode, model::RunMode::Background) { continue; }
+					if matches!(item.kind, model::ItemKind::Brew) { continue; }
+					let Some(p) = item.port else { continue; };
+					let already = st.running.lock().unwrap().contains_key(&item.id);
+					if already { claimed_ports.insert(p); continue; }
+					if claimed_ports.contains(&p) { continue; }
+					if commands::adopt_if_listening(&app_handle, item) {
+						claimed_ports.insert(p);
+					}
+				}
+
+				commands::persist_pids(&st);
+			}
 
 			// Start the background status-poll loop.
 			health::spawn_poll_loop(app.handle().clone());
@@ -108,6 +157,10 @@ pub fn run() {
 						for (_, mut r) in children {
 							let _ = supervisor::stop(&mut r);
 						}
+						// Children are stopped; clear pids.json so the next launch
+						// doesn't try to reattach to processes we just killed.
+						let dir = app.state::<state::AppState>().dir.clone();
+						let _ = store::save_pids(&dir, &std::collections::HashMap::new());
 						app.exit(0);
 					}
 				})
@@ -135,10 +188,14 @@ pub fn run() {
 		.run(|app_handle, event| {
 			if let tauri::RunEvent::ExitRequested { .. } = event {
 				let st = app_handle.state::<state::AppState>();
-				let mut running = st.running.lock().unwrap();
-				for (_, r) in running.iter_mut() {
-					let _ = supervisor::stop(r);
+				{
+					let mut running = st.running.lock().unwrap();
+					for (_, r) in running.iter_mut() {
+						let _ = supervisor::stop(r);
+					}
 				}
+				// Match the quit handler: clear persisted PIDs after stopping.
+				let _ = store::save_pids(&st.dir, &std::collections::HashMap::new());
 			}
 		});
 }

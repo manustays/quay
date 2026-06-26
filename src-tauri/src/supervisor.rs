@@ -4,11 +4,23 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 
-/// A spawned background child and its log file path.
+/// A tracked background process and its log file path.
+///
+/// `child` is `Some` when we spawned the process ourselves (an *owned* process,
+/// which is its own session/process-group leader via `setsid`). It is `None` for
+/// an *adopted* process — one we reattached to by PID/port after an app restart,
+/// for which we hold no `Child` handle and did not create its process group.
 pub struct Running {
 	pub pid: u32,
-	child: Child,
+	child: Option<Child>,
 	pub log_path: PathBuf,
+}
+
+impl Running {
+	/// True if we spawned this process (and therefore own its process group).
+	pub fn is_owned(&self) -> bool {
+		self.child.is_some()
+	}
 }
 
 /// Spawn a background item via login shell in its own process group, logging to file.
@@ -61,14 +73,29 @@ pub fn spawn_background(item: &ManagedItem, logs_dir: &Path) -> Result<Running, 
 		.spawn()
 		.map_err(|e| AppError::Message(format!("spawn failed: {e}")))?;
 	let pid = child.id();
-	Ok(Running { pid, child, log_path })
+	Ok(Running { pid, child: Some(child), log_path })
 }
 
-/// SIGTERM the process group; escalate to SIGKILL after 5 s if still alive.
+/// Build a `Running` for an already-running process we did **not** spawn.
+///
+/// Used to reattach to an orphaned service (after an app restart) identified by PID
+/// and/or its listening port. Has no `Child` handle, so liveness is checked via
+/// `kill(pid, 0)` and stop targets the PID directly rather than its process group.
+pub fn adopt(pid: u32, log_path: PathBuf) -> Running {
+	Running { pid, child: None, log_path }
+}
+
+/// SIGTERM then (after 5 s) SIGKILL the process.
+///
+/// For an *owned* process (spawned by us as a `setsid` group leader) the signal is
+/// sent to the whole process group via `kill(-pgid, …)`, reaping grandchildren. For
+/// an *adopted* process we only signal the PID itself — we did not create its group,
+/// so signalling `-pgid` could hit unrelated processes sharing that group.
 pub fn stop(running: &mut Running) -> Result<(), AppError> {
-	let pgid = running.pid as i32;
-	// Negative pgid targets the entire process group.
-	unsafe { libc::kill(-pgid, libc::SIGTERM) };
+	let owned = running.is_owned();
+	let pid = running.pid as i32;
+	let target = if owned { -pid } else { pid };
+	unsafe { libc::kill(target, libc::SIGTERM) };
 
 	for _ in 0..50 {
 		if !is_alive(running) {
@@ -78,14 +105,74 @@ pub fn stop(running: &mut Running) -> Result<(), AppError> {
 	}
 
 	// Still alive after 5 s — escalate.
-	unsafe { libc::kill(-pgid, libc::SIGKILL) };
-	let _ = running.child.wait();
+	unsafe { libc::kill(target, libc::SIGKILL) };
+	if let Some(child) = running.child.as_mut() {
+		let _ = child.wait();
+	}
 	Ok(())
 }
 
-/// Return `true` if the child process has not yet exited.
+/// Return `true` if the process has not yet exited.
+///
+/// Owned processes use `try_wait` (reaps on exit); adopted ones probe with
+/// `kill(pid, 0)`, which succeeds while the PID is live.
 pub fn is_alive(running: &mut Running) -> bool {
-	matches!(running.child.try_wait(), Ok(None))
+	match running.child.as_mut() {
+		Some(child) => matches!(child.try_wait(), Ok(None)),
+		None => unsafe { libc::kill(running.pid as i32, 0) == 0 },
+	}
+}
+
+/// Parse `lsof -t` output (one PID per line) into a sorted, de-duplicated list.
+///
+/// Tolerates blank lines and non-numeric garbage. Sorting makes PID selection
+/// deterministic when a port has multiple listeners (e.g. IPv4 + IPv6).
+pub fn parse_lsof_pids(out: &str) -> Vec<u32> {
+	let mut pids: Vec<u32> = out
+		.lines()
+		.filter_map(|l| l.trim().parse::<u32>().ok())
+		.collect();
+	pids.sort_unstable();
+	pids.dedup();
+	pids
+}
+
+/// PIDs of processes listening on `127.0.0.1:<port>` (TCP), via `lsof`.
+///
+/// Returns an empty vec if `lsof` is missing or fails — callers degrade to
+/// handle-only behavior.
+pub fn pids_listening(port: u16) -> Vec<u32> {
+	let Ok(out) = Command::new("lsof")
+		.args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+		.output()
+	else {
+		return vec![];
+	};
+	parse_lsof_pids(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// Best-effort: SIGTERM then (after 5 s) SIGKILL every PID listening on `port`.
+///
+/// The guaranteed "free the port" fallback used on explicit Stop when there is no
+/// owned child to kill (e.g. an adopted/orphaned service). Signals PIDs directly —
+/// never their process groups — since these processes were not spawned by us.
+pub fn stop_port(port: u16) {
+	let pids = pids_listening(port);
+	if pids.is_empty() {
+		return;
+	}
+	for &pid in &pids {
+		unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+	}
+	for _ in 0..50 {
+		if pids_listening(port).is_empty() {
+			return;
+		}
+		std::thread::sleep(std::time::Duration::from_millis(100));
+	}
+	for &pid in &pids {
+		unsafe { libc::kill(pid as i32, libc::SIGKILL) };
+	}
 }
 
 #[cfg(test)]
@@ -113,6 +200,29 @@ mod tests {
 		stop(&mut r).unwrap();
 		assert!(!is_alive(&mut r));
 		std::fs::remove_dir_all(&logs).ok();
+	}
+
+	#[test]
+	fn parse_lsof_pids_handles_blanks_and_garbage() {
+		assert_eq!(parse_lsof_pids("123\n456\n"), vec![123, 456]);
+		assert_eq!(parse_lsof_pids(""), Vec::<u32>::new());
+		// blank lines, whitespace, and non-numeric lines are ignored; sorted + deduped
+		assert_eq!(parse_lsof_pids("\n  789 \nnot-a-pid\n123\n123\n"), vec![123, 789]);
+	}
+
+	#[test]
+	fn adopted_running_tracks_liveness_via_kill0() {
+		// Adopt a PID with no Child handle and verify the kill(pid,0) liveness path.
+		// We reap via the real handle (in production an adopted process is reparented
+		// to launchd and reaped there, so kill(pid,0) flips to ESRCH on death).
+		let mut child = std::process::Command::new("sleep").arg("30").spawn().unwrap();
+		let pid = child.id();
+		let mut adopted = adopt(pid, std::path::PathBuf::from("/tmp/none.log"));
+		assert!(!adopted.is_owned());
+		assert!(is_alive(&mut adopted));
+		child.kill().unwrap();
+		child.wait().unwrap(); // reap so the PID is fully gone, not a zombie
+		assert!(!is_alive(&mut adopted));
 	}
 
 	#[test]
