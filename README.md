@@ -1,5 +1,7 @@
-# Menubar Service Manager
+# Quay
 
+> **Quay** _(pronounced "key")_ — **Where your ports come in.**
+>
 > A native macOS menubar app to start, stop, and monitor your local dev services — Node/Python servers, Homebrew services, and long-running terminal agents — from one place.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -12,24 +14,24 @@
 
 If you build a lot of local services, you know the dance: remember which folder, `cd` into it, run the start command, switch to the browser, and repeat for every project. Keeping several running at once means juggling terminal tabs and trying to remember what's up and on which port.
 
-**Menubar Service Manager** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…) and long-running terminal agents.
+**Quay** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…) and long-running terminal agents.
 
 ## What it looks like
 
 Click the menubar icon and a popover opens:
 
 ```
-┌─────────────────────────────────────┐
-│ 🔍 search…              [ ■ Stop all]│
-├─────────────────────────────────────┤
-│ ★ FAVORITES                         │
-│  ● myapp     :5173  [■][↗][>_]      │
-│  ● claude    term   [■]    [>_]      │
-├─────────────────────────────────────┤
-│  ▸ More (4)                          │
-├─────────────────────────────────────┤
+┌────────────────────────────────────——─┐
+│ 🔍 search…              [ ■ Stop all] │
+├──────────────────────────────────——───┤
+│ ★ FAVORITES                           │
+│  ● myapp     :5173  [■][↗][>_]        │
+│  ● claude    term   [■]    [>_]       │
+├────────────────────────────────────——─┤
+│  ▸ More (4)                           │
+├────────────────────────────────────——─┤
 │  [+ Add]                  [⚙ Settings]│
-└─────────────────────────────────────┘
+└───────────────────────────────────——──┘
 ```
 
 Status at a glance: ● running (green) · ◐ starting (yellow) · ○ stopped (grey) · ✖ error (red).

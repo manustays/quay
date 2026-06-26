@@ -1,4 +1,4 @@
-# Contributing to Menubar Service Manager
+# Contributing to Quay
 
 Thanks for your interest in improving this project. This guide covers how to get set up, the conventions we follow, and how to get a change merged.
 
@@ -92,7 +92,7 @@ Open an issue with:
 - macOS version and chip (Apple Silicon / Intel)
 - What you did, what you expected, what happened
 - Relevant log output — per-item logs live at
-  `~/Library/Application Support/com.abhi.menubar-service-manager/logs/<id>.log`
+  `~/Library/Application Support/com.abhi.quay/logs/<id>.log`
 
 ## License
 

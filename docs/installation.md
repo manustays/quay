@@ -1,6 +1,6 @@
 # Installation
 
-Menubar Service Manager is **macOS only**. There are no pre-built signed releases yet, so you install it by building from source (or by building your own `.dmg` and installing that).
+Quay is **macOS only**. There are no pre-built signed releases yet, so you install it by building from source (or by building your own `.dmg` and installing that).
 
 ## Prerequisites
 
@@ -43,15 +43,15 @@ npm run tauri build
 
 This produces:
 
-- The app bundle: `src-tauri/target/release/bundle/macos/Menubar Service Manager.app`
-- A disk image: `src-tauri/target/release/bundle/dmg/Menubar Service Manager_0.1.0_<arch>.dmg`
+- The app bundle: `src-tauri/target/release/bundle/macos/Quay.app`
+- A disk image: `src-tauri/target/release/bundle/dmg/Quay_0.1.0_<arch>.dmg`
 
 Install it by either:
 
-- Opening the `.dmg` and dragging **Menubar Service Manager** to `/Applications`, or
+- Opening the `.dmg` and dragging **Quay** to `/Applications`, or
 - Copying the `.app` straight to `/Applications`:
   ```bash
-  cp -R "src-tauri/target/release/bundle/macos/Menubar Service Manager.app" /Applications/
+  cp -R "src-tauri/target/release/bundle/macos/Quay.app" /Applications/
   ```
 
 ### "App can't be opened because it is from an unidentified developer"
@@ -59,7 +59,7 @@ Install it by either:
 A locally-built app is unsigned, so Gatekeeper will warn on first launch. To open it anyway:
 
 - **Right-click** the app in `/Applications` → **Open** → **Open** in the dialog, **or**
-- Run once: `xattr -dr com.apple.quarantine "/Applications/Menubar Service Manager.app"`
+- Run once: `xattr -dr com.apple.quarantine "/Applications/Quay.app"`
 
 To produce a properly **signed and notarized** build that opens without warnings (recommended if you distribute it to others), see [Packaging & distribution](packaging.md).
 
@@ -69,7 +69,7 @@ To produce a properly **signed and notarized** build that opens without warnings
 - Left-click the icon → popover. Right-click the icon → **Quit**.
 - On first run there are no items — click **+ Add** to register your first service. See the [Usage guide](usage.md).
 - Configuration and logs are written to
-  `~/Library/Application Support/com.abhi.menubar-service-manager/`.
+  `~/Library/Application Support/com.abhi.quay/`.
 
 ## Updating
 
@@ -86,7 +86,7 @@ Your `config.json` is stored outside the project directory, so it is preserved a
 ## Uninstalling
 
 1. Quit the app (tray → **Quit**).
-2. Delete the app: `rm -rf "/Applications/Menubar Service Manager.app"`.
+2. Delete the app: `rm -rf "/Applications/Quay.app"`.
 3. (Optional) Remove its data:
-   `rm -rf "~/Library/Application Support/com.abhi.menubar-service-manager"`.
+   `rm -rf "~/Library/Application Support/com.abhi.quay"`.
 4. (Optional) If you enabled **Launch at login**, disable it first in Settings, or remove the login item under **System Settings → General → Login Items**.

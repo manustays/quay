@@ -1,6 +1,6 @@
 # Usage
 
-This guide walks through the day-to-day use of Menubar Service Manager.
+This guide walks through the day-to-day use of Quay.
 
 ## The popover
 
@@ -104,7 +104,7 @@ The header **Stop all** button (with confirmation) stops every running backgroun
 
 ## Where things live
 
-- **Config:** `~/Library/Application Support/com.abhi.menubar-service-manager/config.json`
-- **Logs:** `~/Library/Application Support/com.abhi.menubar-service-manager/logs/<id>.log` (one per item)
+- **Config:** `~/Library/Application Support/com.abhi.quay/config.json`
+- **Logs:** `~/Library/Application Support/com.abhi.quay/logs/<id>.log` (one per item)
 
 See [Configuration](configuration.md) for the full file format.

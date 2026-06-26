@@ -1,6 +1,6 @@
 # Architecture
 
-A contributor-facing overview of how Menubar Service Manager is built. For the original decisions and rationale, see the [design spec](specs/2026-06-26-menubar-service-manager-design.md).
+A contributor-facing overview of how Quay is built. For the original decisions and rationale, see the [design spec](specs/2026-06-26-menubar-service-manager-design.md).
 
 ## Big picture
 
