@@ -15,6 +15,7 @@ export const openBrowser = (id: string) => invoke<void>('open_browser', { id });
 export const openTerminal = (id: string) => invoke<void>('open_terminal', { id });
 export const tailLog = (id: string, lines: number) => invoke<string>('tail_log', { id, lines });
 export const detectFolder = (path: string) => invoke<DetectResult>('detect_folder_cmd', { path });
+export const getStatuses = () => invoke<ItemStatus[]>('get_statuses');
 export const getSettings = () => invoke<Settings>('get_settings');
 export const updateSettings = (settings: Settings) => invoke<void>('update_settings', { settings });
 

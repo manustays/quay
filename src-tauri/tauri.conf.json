@@ -19,10 +19,15 @@
 				"height": 520,
 				"decorations": false,
 				"resizable": false,
-				"transparent": false,
+				"transparent": true,
 				"alwaysOnTop": true,
 				"visible": false,
-				"skipTaskbar": true
+				"skipTaskbar": true,
+				"windowEffects": {
+					"effects": ["popover"],
+					"state": "active",
+					"radius": 12
+				}
 			}
 		],
 		"security": {
