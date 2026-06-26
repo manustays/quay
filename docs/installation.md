@@ -22,8 +22,8 @@ If it's missing, restart your shell or `source "$HOME/.cargo/env"`. See [Trouble
 ## Option A — Build and run from source (quickest to try)
 
 ```bash
-git clone https://github.com/manustays/menubar-cli-launcher.git
-cd menubar-cli-launcher
+git clone https://github.com/manustays/quay.git
+cd quay
 npm install
 npm run tauri dev
 ```
@@ -35,8 +35,8 @@ The first run compiles all Rust dependencies and may take a couple of minutes. W
 ## Option B — Build a release app and install it
 
 ```bash
-git clone https://github.com/manustays/menubar-cli-launcher.git
-cd menubar-cli-launcher
+git clone https://github.com/manustays/quay.git
+cd quay
 npm install
 npm run tauri build
 ```

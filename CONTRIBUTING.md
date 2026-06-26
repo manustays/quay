@@ -20,8 +20,8 @@ You'll need:
 Then:
 
 ```bash
-git clone https://github.com/manustays/menubar-cli-launcher.git
-cd menubar-cli-launcher
+git clone https://github.com/manustays/quay.git
+cd quay
 npm install
 npm run tauri dev      # launches the app in development mode
 ```

@@ -65,8 +65,8 @@ Status at a glance: ● running (green) · ◐ starting (yellow) · ○ stopped 
 There are no pre-built signed releases yet, so the supported path today is **build from source** (or build your own `.dmg`).
 
 ```bash
-git clone https://github.com/manustays/menubar-cli-launcher.git
-cd menubar-cli-launcher
+git clone https://github.com/manustays/quay.git
+cd quay
 npm install
 npm run tauri build      # produces a .app and .dmg under src-tauri/target/release/bundle/
 ```

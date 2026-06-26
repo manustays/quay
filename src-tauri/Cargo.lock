@@ -1747,24 +1747,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "menubar-service-manager"
-version = "0.1.0"
-dependencies = [
- "dirs 5.0.1",
- "libc",
- "serde",
- "serde_json",
- "sysinfo",
- "tauri",
- "tauri-build",
- "tauri-plugin-autostart",
- "tauri-plugin-dialog",
- "tauri-plugin-positioner",
- "ureq",
- "uuid",
-]
-
-[[package]]
 name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2356,6 +2338,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8fd00f0bb2e90d81d1044c2b32617f68fcb9fa3bb7640c23e9c748e53fb30934"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "quay"
+version = "0.1.0"
+dependencies = [
+ "dirs 5.0.1",
+ "libc",
+ "serde",
+ "serde_json",
+ "sysinfo",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-autostart",
+ "tauri-plugin-dialog",
+ "tauri-plugin-positioner",
+ "ureq",
+ "uuid",
 ]
 
 [[package]]

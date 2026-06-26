@@ -1,11 +1,11 @@
 [package]
-name = "menubar-service-manager"
+name = "quay"
 version = "0.1.0"
 description = "A native macOS menubar app to start, stop, and monitor your local dev services, Homebrew services, and terminal agents."
 authors = ["Kumar Abhishek <manustays@gmail.com>"]
 license = "MIT"
-repository = "https://github.com/manustays/menubar-cli-launcher"
-homepage = "https://github.com/manustays/menubar-cli-launcher"
+repository = "https://github.com/manustays/quay"
+homepage = "https://github.com/manustays/quay"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -14,7 +14,7 @@ edition = "2021"
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
 # This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
-name = "menubar_service_manager_lib"
+name = "quay_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

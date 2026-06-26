@@ -111,4 +111,4 @@ Fix: re-run and approve the “control Finder / System Events” prompt, or pre-
 
 ## Still stuck?
 
-Open an issue at <https://github.com/manustays/menubar-cli-launcher/issues> with your macOS version + chip, what you did, and the relevant log output.
+Open an issue at <https://github.com/manustays/quay/issues> with your macOS version + chip, what you did, and the relevant log output.
