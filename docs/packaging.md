@@ -1,0 +1,134 @@
+# Packaging & Distribution (macOS)
+
+How to turn the source into a distributable macOS app — a `.app` bundle and a `.dmg`, optionally **code-signed** and **notarized** so it opens cleanly on other people's Macs.
+
+Bundling is handled by the Tauri CLI (`tauri build`), configured in `src-tauri/tauri.conf.json` under `"bundle"`. The current config bundles `"targets": "all"`, which on macOS produces both an `.app` and a `.dmg`.
+
+## 1. Build an unsigned bundle
+
+```bash
+npm install
+npm run tauri build
+```
+
+Outputs:
+
+| Artifact | Path |
+|----------|------|
+| App bundle | `src-tauri/target/release/bundle/macos/Menubar Service Manager.app` |
+| Disk image | `src-tauri/target/release/bundle/dmg/Menubar Service Manager_0.1.0_<arch>.dmg` |
+
+`<arch>` is `aarch64` on Apple Silicon or `x64` on Intel. An unsigned build runs locally but triggers a Gatekeeper warning on other machines (see [Installation](installation.md#app-cant-be-opened-because-it-is-from-an-unidentified-developer)).
+
+## 2. Build a universal (Intel + Apple Silicon) binary
+
+To ship one app that runs natively on both architectures, add the Rust targets once:
+
+```bash
+rustup target add aarch64-apple-darwin x86_64-apple-darwin
+```
+
+Then build universal:
+
+```bash
+npm run tauri build -- --target universal-apple-darwin
+```
+
+The bundle lands under `src-tauri/target/universal-apple-darwin/release/bundle/`.
+
+## 3. Code signing
+
+To distribute without the "unidentified developer" warning you need an **Apple Developer ID Application** certificate (a paid Apple Developer account).
+
+1. In Xcode (or via the Developer portal), create/download a **Developer ID Application** certificate into your login keychain.
+2. Find its identity name:
+   ```bash
+   security find-identity -v -p codesigning
+   # e.g. "Developer ID Application: Your Name (TEAMID1234)"
+   ```
+3. Tell Tauri to sign with it. Either set it in `src-tauri/tauri.conf.json`:
+   ```jsonc
+   "bundle": {
+     "macOS": {
+       "signingIdentity": "Developer ID Application: Your Name (TEAMID1234)"
+     }
+   }
+   ```
+   …or pass it via environment variable at build time:
+   ```bash
+   export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID1234)"
+   npm run tauri build
+   ```
+
+Tauri signs the `.app` (and the binaries inside) during the bundle step.
+
+### Entitlements
+
+This app does not require special entitlements for its core behavior (spawning child processes, opening Terminal via `osascript`, hitting localhost). If you later add capabilities that need hardened-runtime entitlements, create an entitlements plist and reference it under `bundle.macOS.entitlements` in `tauri.conf.json`.
+
+> Note: the app uses macOS private API (`macOSPrivateApi: true`, for the transparent/positioned popover). This is fine for **Developer ID** distribution (direct download). It is **not** allowed on the Mac App Store — App Store submission would require removing that flag.
+
+## 4. Notarization
+
+Notarization is Apple scanning your signed app and stapling an approval ticket, so Gatekeeper trusts it on first launch.
+
+You need:
+
+- Your **Apple ID** email.
+- An **app-specific password** for that Apple ID (create at [appleid.apple.com](https://appleid.apple.com) → Sign-In and Security → App-Specific Passwords).
+- Your **Team ID** (from the Developer portal).
+
+Tauri can notarize automatically during `tauri build` when these environment variables are set:
+
+```bash
+export APPLE_ID="you@example.com"
+export APPLE_PASSWORD="abcd-efgh-ijkl-mnop"   # the app-specific password
+export APPLE_TEAM_ID="TEAMID1234"
+export APPLE_SIGNING_IDENTITY="Developer ID Application: Your Name (TEAMID1234)"
+
+npm run tauri build
+```
+
+Tauri will sign, notarize, and staple the ticket to the bundle. The resulting `.dmg` opens without warnings on any Mac.
+
+### Verifying
+
+```bash
+# signature
+codesign --verify --deep --strict --verbose=2 "src-tauri/target/release/bundle/macos/Menubar Service Manager.app"
+
+# notarization / Gatekeeper assessment
+spctl -a -vvv -t install "src-tauri/target/release/bundle/macos/Menubar Service Manager.app"
+```
+
+A notarized app reports `source=Notarized Developer ID` and `accepted`.
+
+## 5. Versioning a release
+
+Bump the version in **both**:
+
+- `src-tauri/tauri.conf.json` → `"version"`
+- `package.json` → `"version"`
+
+(Keep them in sync — Tauri uses `tauri.conf.json`; npm scripts read `package.json`.) Then build, and tag the release in git:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Attach the `.dmg` to a GitHub Release.
+
+## 6. CI (optional)
+
+You can automate signed, notarized builds in GitHub Actions with [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action), storing the certificate (`.p12`, base64-encoded) and the Apple credentials as encrypted repository secrets. The same environment variables above (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_SIGNING_IDENTITY`, plus `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD`) drive the signing step. See the Tauri ["Distributing → macOS"](https://tauri.app/distribute/) guide for a ready-made workflow.
+
+## Quick reference
+
+| Goal | Command |
+|------|---------|
+| Local unsigned build | `npm run tauri build` |
+| Universal binary | `npm run tauri build -- --target universal-apple-darwin` |
+| Signed + notarized | set `APPLE_*` env vars, then `npm run tauri build` |
+| Verify signature | `codesign --verify --deep --strict -v=2 <app>` |
+| Verify notarization | `spctl -a -vvv -t install <app>` |
