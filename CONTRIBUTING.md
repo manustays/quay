@@ -92,7 +92,7 @@ Open an issue with:
 - macOS version and chip (Apple Silicon / Intel)
 - What you did, what you expected, what happened
 - Relevant log output — per-item logs live at
-  `~/Library/Application Support/com.abhi.quay/logs/<id>.log`
+  `~/Library/Application Support/am.abhi.quay/logs/<id>.log`
 
 ## License
 

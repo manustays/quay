@@ -104,7 +104,7 @@ The header **Stop all** button (with confirmation) stops every running backgroun
 
 ## Where things live
 
-- **Config:** `~/Library/Application Support/com.abhi.quay/config.json`
-- **Logs:** `~/Library/Application Support/com.abhi.quay/logs/<id>.log` (one per item)
+- **Config:** `~/Library/Application Support/am.abhi.quay/config.json`
+- **Logs:** `~/Library/Application Support/am.abhi.quay/logs/<id>.log` (one per item)
 
 See [Configuration](configuration.md) for the full file format.

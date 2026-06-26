@@ -69,7 +69,7 @@ To produce a properly **signed and notarized** build that opens without warnings
 - Left-click the icon → popover. Right-click the icon → **Quit**.
 - On first run there are no items — click **+ Add** to register your first service. See the [Usage guide](usage.md).
 - Configuration and logs are written to
-  `~/Library/Application Support/com.abhi.quay/`.
+  `~/Library/Application Support/am.abhi.quay/`.
 
 ## Updating
 
@@ -88,5 +88,5 @@ Your `config.json` is stored outside the project directory, so it is preserved a
 1. Quit the app (tray → **Quit**).
 2. Delete the app: `rm -rf "/Applications/Quay.app"`.
 3. (Optional) Remove its data:
-   `rm -rf "~/Library/Application Support/com.abhi.quay"`.
+   `rm -rf "~/Library/Application Support/am.abhi.quay"`.
 4. (Optional) If you enabled **Launch at login**, disable it first in Settings, or remove the login item under **System Settings → General → Login Items**.

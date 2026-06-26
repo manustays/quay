@@ -3,7 +3,7 @@
 Common issues and how to fix them. Per-item logs are your best friend — find them at:
 
 ```
-~/Library/Application Support/com.abhi.quay/logs/<id>.log
+~/Library/Application Support/am.abhi.quay/logs/<id>.log
 ```
 
 ## `cargo` not found
@@ -98,7 +98,7 @@ Toggle it in **Settings**. You can verify/remove it under **System Settings → 
 Quit the app, then remove its data directory and relaunch with a clean slate:
 
 ```bash
-rm -rf "~/Library/Application Support/com.abhi.quay"
+rm -rf "~/Library/Application Support/am.abhi.quay"
 ```
 
 If only the config is bad, the app already auto-recovers: a corrupt `config.json` is moved to `config.bad.json` on launch and replaced with defaults.

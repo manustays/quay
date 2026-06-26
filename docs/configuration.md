@@ -5,13 +5,13 @@ All state is stored in a single JSON file. You normally edit it through the app'
 ## Location
 
 ```
-~/Library/Application Support/com.abhi.quay/config.json
+~/Library/Application Support/am.abhi.quay/config.json
 ```
 
 Per-item logs live alongside it:
 
 ```
-~/Library/Application Support/com.abhi.quay/logs/<id>.log
+~/Library/Application Support/am.abhi.quay/logs/<id>.log
 ```
 
 The file is written atomically (temp file + rename) on every change. If it ever becomes unreadable or corrupt, the app backs it up to `config.bad.json` and starts fresh with defaults — so a bad edit won't crash the app.
