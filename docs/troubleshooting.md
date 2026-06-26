@@ -103,6 +103,12 @@ rm -rf "~/Library/Application Support/com.abhi.menubar-service-manager"
 
 If only the config is bad, the app already auto-recovers: a corrupt `config.json` is moved to `config.bad.json` on launch and replaced with defaults.
 
+## `npm run tauri build` fails at `bundle_dmg.sh`
+
+The app compiles and the `.app` bundles, but the `.dmg` step fails with `failed to run bundle_dmg.sh`. The DMG bundler uses an AppleScript to make **Finder** style the disk-image window, and macOS blocks that until you grant **Automation** consent (the first attempt errors with `-1743`).
+
+Fix: re-run and approve the “control Finder / System Events” prompt, or pre-allow your terminal under **System Settings → Privacy & Security → Automation → Finder**, then re-run. The `.app` was already built under `src-tauri/target/release/bundle/macos/`. Full detail and the CI/headless workaround are in [Packaging → Troubleshooting the DMG build](packaging.md#troubleshooting-the-dmg-build).
+
 ## Still stuck?
 
 Open an issue at <https://github.com/manustays/menubar-cli-launcher/issues> with your macOS version + chip, what you did, and the relevant log output.

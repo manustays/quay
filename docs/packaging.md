@@ -123,12 +123,56 @@ Attach the `.dmg` to a GitHub Release.
 
 You can automate signed, notarized builds in GitHub Actions with [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action), storing the certificate (`.p12`, base64-encoded) and the Apple credentials as encrypted repository secrets. The same environment variables above (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_SIGNING_IDENTITY`, plus `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD`) drive the signing step. See the Tauri ["Distributing → macOS"](https://tauri.app/distribute/) guide for a ready-made workflow.
 
+## Troubleshooting the DMG build
+
+### `failed to run bundle_dmg.sh` (Automation permission)
+
+`npm run tauri build` compiles the app and bundles the `.app`, then fails when building the `.dmg`:
+
+```
+Bundling Menubar Service Manager_0.1.0_aarch64.dmg ...
+     Running bundle_dmg.sh
+failed to bundle project: error running bundle_dmg.sh
+```
+
+**Cause.** Tauri's `bundle_dmg.sh` (a fork of `create-dmg`) runs an **AppleScript** that tells **Finder** to lay out the DMG window (icon positions, background). The first time the build process sends Apple events to Finder, macOS requires **Automation consent**. Until that's granted, `osascript` returns `-1743 (Not authorized to send Apple events)`, and because the script runs with `set -e`, it aborts with the generic message above. The `.app` is already built at this point — only the cosmetic DMG styling failed.
+
+**Fix (interactive build).** Grant the consent, then re-run:
+
+1. Re-run `npm run tauri build` and **approve** the “… wants to control Finder” / “System Events” prompt if it appears, **or**
+2. Pre-grant it under **System Settings → Privacy & Security → Automation** — allow your terminal (Terminal/iTerm) to control **Finder** (and **System Events**), then re-run.
+
+Once consent exists the DMG builds every time. (The recompile is skipped on a re-run — only the bundling step repeats.) To confirm the underlying error yourself, run with `--verbose`:
+
+```bash
+npm run tauri build -- --verbose
+```
+
+and look for the AppleScript / `-1743` line.
+
+**Fix (CI / headless, no Finder).** A machine with no GUI/Finder session can't run the styling AppleScript at all. Options:
+
+- Build only the app and skip the DMG by setting `"bundle": { "targets": ["app"] }` in `src-tauri/tauri.conf.json` (or `--bundles app` on the CLI), then zip the `.app` for distribution, **or**
+- Use [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action) in GitHub Actions on a `macos` runner, which runs in a context where the DMG step works.
+
+### Stale temp image / mounted volume
+
+A previously **failed** DMG run can leave a read-write temp image (`rw.<n>.*.dmg`) under `target/release/bundle/macos/` or a mounted `/Volumes/dmg.*`. These don't normally block a retry (the temp name is randomized), but if a build complains about a busy device, detach any leftover mount and remove the temp image:
+
+```bash
+hdiutil info | grep /Volumes/dmg     # find stray mounts
+hdiutil detach /Volumes/dmg.XXXXXX   # detach it
+rm -f src-tauri/target/release/bundle/macos/rw.*.dmg
+```
+
 ## Quick reference
 
 | Goal | Command |
 |------|---------|
 | Local unsigned build | `npm run tauri build` |
+| App only (skip DMG) | `npm run tauri build -- --bundles app` |
 | Universal binary | `npm run tauri build -- --target universal-apple-darwin` |
 | Signed + notarized | set `APPLE_*` env vars, then `npm run tauri build` |
 | Verify signature | `codesign --verify --deep --strict -v=2 <app>` |
 | Verify notarization | `spctl -a -vvv -t install <app>` |
+| Debug a bundle failure | `npm run tauri build -- --verbose` |
