@@ -26,6 +26,8 @@ Each row shows a colored dot:
 
 Status is refreshed automatically by a background poll (every few seconds, configurable). You never need to manually refresh.
 
+Running rows also show live **CPU% · memory** next to the port — sampled only while the popover is open, every 10s by default. See [metrics](metrics.md).
+
 ### Row actions
 
 | Button | Action | Shown when |
@@ -97,6 +99,7 @@ The header **Stop all** button (with confirmation) stops every running backgroun
 
 - **Terminal app** — `Terminal` (default) or `iTerm`. Used for the "open terminal" action and `terminal`-mode items.
 - **Poll interval (sec)** — how often status is checked (default 3).
+- **Metrics interval (sec)** — how often per-process CPU%/memory are sampled while the popover is open (default 10). See [metrics](metrics.md).
 - **Launch at login** — register/unregister the app as a macOS login item.
 
 ## Where things live

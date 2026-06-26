@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { getItems, getStatuses, onStatusChanged } from './ipc';
-import type { ManagedItem, Status } from './model';
+import { getItems, getStatuses, onStatusChanged, onMetricsChanged } from './ipc';
+import type { ItemMetrics, ManagedItem, Status } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -29,6 +29,7 @@ export function App(): React.JSX.Element {
 	const [items, setItems] = useState<ManagedItem[]>([]);
 	const [statuses, setStatuses] = useState<Map<string, Status>>(new Map());
 	const [lastErrors, setLastErrors] = useState<Map<string, string>>(new Map());
+	const [metrics, setMetrics] = useState<Map<string, ItemMetrics>>(new Map());
 
 	// Dialog state: `editing` is undefined when closed, null for "add new",
 	// or the item being edited; `settingsOpen` toggles the settings dialog.
@@ -47,7 +48,14 @@ export function App(): React.JSX.Element {
 		// onStatusChanged resolves to an unlisten fn asynchronously; guard against
 		// the effect being torn down before the subscription resolves.
 		let cancelled = false;
-		let unlisten: UnlistenFn | undefined;
+		const unlisteners: UnlistenFn[] = [];
+		// Register an unlisten fn, or call it immediately if we already unmounted
+		// (the listen() promise can resolve after teardown).
+		const track = (fn: UnlistenFn) => {
+			if (cancelled) fn();
+			else unlisteners.push(fn);
+		};
+
 		void onStatusChanged((s) => {
 			setStatuses((prev) => new Map(prev).set(s.id, s.status));
 			setLastErrors((prev) => {
@@ -56,10 +64,13 @@ export function App(): React.JSX.Element {
 				else if (s.status !== 'error') next.delete(s.id);
 				return next;
 			});
-		}).then((fn) => {
-			if (cancelled) fn();
-			else unlisten = fn;
-		});
+		}).then(track);
+
+		// Metrics arrive as a full snapshot per tick; rebuild the map wholesale so
+		// stopped/removed items drop out (no stale CPU/memory lingers).
+		void onMetricsChanged((list) => {
+			setMetrics(new Map(list.map((m) => [m.id, m])));
+		}).then(track);
 
 		// Seed current statuses once. `status_changed` only fires on change, so a
 		// status set by the backend's startup poll (before this listener attached)
@@ -83,7 +94,7 @@ export function App(): React.JSX.Element {
 
 		return () => {
 			cancelled = true;
-			unlisten?.();
+			for (const fn of unlisteners) fn();
 		};
 	}, [refresh]);
 
@@ -93,6 +104,7 @@ export function App(): React.JSX.Element {
 				items={items}
 				statuses={statuses}
 				lastErrors={lastErrors}
+				metrics={metrics}
 				onChange={refresh}
 				onAdd={() => setEditing(null)}
 				onEdit={(item) => setEditing(item)}

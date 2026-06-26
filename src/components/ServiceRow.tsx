@@ -16,7 +16,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
-import type { ManagedItem, Status } from '../model';
+import { formatBytes, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import {
 	deleteItem,
 	openBrowser,
@@ -31,6 +31,7 @@ interface ServiceRowProps {
 	item: ManagedItem;
 	status: Status;
 	lastError: string | undefined;
+	metrics: ItemMetrics | undefined;
 	index: number;
 	onChange: () => void;
 	onEdit: (item: ManagedItem) => void;
@@ -60,6 +61,7 @@ export function ServiceRow({
 	item,
 	status,
 	lastError,
+	metrics,
 	index,
 	onChange,
 	onEdit,
@@ -116,6 +118,11 @@ export function ServiceRow({
 								<span className="font-mono text-[11px]">:{item.port}</span>
 							)}
 							<span className="text-[11px]">{descriptor(item)}</span>
+							{running && metrics && (
+								<span className="font-mono text-[11px] tabular-nums">
+									{metrics.cpuPercent.toFixed(0)}% · {formatBytes(metrics.memoryBytes)}
+								</span>
+							)}
 						</span>
 					</span>
 				</CollapsibleTrigger>

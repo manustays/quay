@@ -40,15 +40,22 @@ pub struct ManagedItem {
 pub struct Settings {
 	#[serde(rename = "terminalApp")] pub terminal_app: String,
 	#[serde(rename = "pollIntervalSec")] pub poll_interval_sec: u64,
+	#[serde(rename = "metricsIntervalSec", default = "default_metrics_interval_sec")]
+	pub metrics_interval_sec: u64,
 	pub browser: String,
 	#[serde(rename = "launchAtLogin")] pub launch_at_login: bool,
 }
+
+/// Default metrics sampling interval (seconds). Used both by `Settings::default`
+/// and as the serde fallback for configs written before this field existed.
+fn default_metrics_interval_sec() -> u64 { 10 }
 
 impl Default for Settings {
 	fn default() -> Self {
 		Self {
 			terminal_app: "Terminal".into(),
 			poll_interval_sec: 3,
+			metrics_interval_sec: default_metrics_interval_sec(),
 			browser: "default".into(),
 			launch_at_login: false,
 		}
@@ -108,6 +115,7 @@ mod tests {
 		let s = Settings::default();
 		assert_eq!(s.terminal_app, "Terminal");
 		assert_eq!(s.poll_interval_sec, 3);
+		assert_eq!(s.metrics_interval_sec, 10);
 		assert_eq!(s.browser, "default");
 		assert!(!s.launch_at_login);
 	}

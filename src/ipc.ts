@@ -1,6 +1,6 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ManagedItem, Settings, ItemStatus, DetectResult } from './model';
+import type { ManagedItem, Settings, ItemStatus, ItemMetrics, DetectResult } from './model';
 
 export const getItems = () => invoke<ManagedItem[]>('get_items');
 export const addItem = (item: ManagedItem) => invoke<ManagedItem>('add_item', { item });
@@ -33,6 +33,16 @@ export const listBrewFormulae = () => invoke<string[]>('list_brew_formulae');
  */
 export function onStatusChanged(cb: (s: ItemStatus) => void): Promise<UnlistenFn> {
 	return listen<ItemStatus>('status_changed', (e) => cb(e.payload));
+}
+
+/**
+ * Subscribe to backend metrics events. The callback receives the full set of
+ * {@link ItemMetrics} for every running item on each sampling tick (the backend
+ * only emits while the popover is open). Replace your map wholesale per event so
+ * stopped/removed items drop out. Returns an unlisten function.
+ */
+export function onMetricsChanged(cb: (m: ItemMetrics[]) => void): Promise<UnlistenFn> {
+	return listen<ItemMetrics[]>('metrics_changed', (e) => cb(e.payload));
 }
 
 /**

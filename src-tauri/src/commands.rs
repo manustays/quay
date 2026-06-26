@@ -124,6 +124,7 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		statuses: std::sync::Mutex::new(std::collections::HashMap::new()),
 		errors: std::sync::Mutex::new(std::collections::HashMap::new()),
 		suppress_hide: std::sync::atomic::AtomicBool::new(false),
+		visible: std::sync::atomic::AtomicBool::new(false),
 	}
 }
 

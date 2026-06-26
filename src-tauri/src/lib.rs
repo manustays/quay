@@ -2,6 +2,7 @@ pub mod brew;
 pub mod commands;
 pub mod detect;
 pub mod health;
+pub mod metrics;
 pub mod model;
 pub mod state;
 pub mod store;
@@ -17,16 +18,22 @@ use tauri::{
 
 /// Toggle the popover window: show+focus if hidden, hide if visible.
 fn toggle_popover(app: &tauri::AppHandle) {
+	use std::sync::atomic::Ordering;
 	if let Some(win) = app.get_webview_window("main") {
 		if win.is_visible().unwrap_or(false) {
-			let _ = win.hide();
+			// Mirror `visible` to the actual outcome of the window op.
+			if win.hide().is_ok() {
+				app.state::<state::AppState>().visible.store(false, Ordering::Relaxed);
+			}
 		} else {
 			let _ = tauri_plugin_positioner::WindowExt::move_window(
 				&win,
 				tauri_plugin_positioner::Position::TrayCenter,
 			);
-			let _ = win.show();
-			let _ = win.set_focus();
+			if win.show().is_ok() {
+				app.state::<state::AppState>().visible.store(true, Ordering::Relaxed);
+				let _ = win.set_focus();
+			}
 		}
 	}
 }
@@ -112,6 +119,9 @@ pub fn run() {
 			// Start the background status-poll loop.
 			health::spawn_poll_loop(app.handle().clone());
 
+			// Start the metrics loop (only samples while the popover is visible).
+			metrics::spawn_metrics_loop(app.handle().clone());
+
 			// Auto-start any items flagged with auto_start = true.
 			{
 				let app_handle = app.handle().clone();
@@ -178,7 +188,16 @@ pub fn run() {
 						.suppress_hide
 						.load(std::sync::atomic::Ordering::Relaxed);
 					if !suppress {
-						let _ = window.hide();
+						// Only clear `visible` when the popover is genuinely hidden —
+						// during a native dialog (suppress_hide) it stays open, so the
+						// metrics loop must keep sampling.
+						if window.hide().is_ok() {
+							window
+								.app_handle()
+								.state::<state::AppState>()
+								.visible
+								.store(false, std::sync::atomic::Ordering::Relaxed);
+						}
 					}
 				}
 			}

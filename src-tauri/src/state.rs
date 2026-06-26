@@ -15,4 +15,8 @@ pub struct AppState {
 	/// When `true`, the `Focused(false)` window-event handler skips hiding the
 	/// popover. Set while a native dialog (e.g. folder picker) is open.
 	pub suppress_hide: AtomicBool,
+	/// `true` while the popover is actually shown. Gates the metrics loop so it
+	/// does no sampling work while the popover is hidden. Set true on show,
+	/// false only when the window is genuinely hidden (see `lib.rs`).
+	pub visible: AtomicBool,
 }

@@ -35,8 +35,20 @@ export interface ManagedItem {
 export interface Settings {
 	terminalApp: string;
 	pollIntervalSec: number;
+	metricsIntervalSec: number;
 	browser: string;
 	launchAtLogin: boolean;
+}
+
+/**
+ * Per-item resource usage — mirrors the Rust `ItemMetrics` struct.
+ * `cpuPercent` is summed across the process tree (may exceed 100 on multi-core);
+ * `memoryBytes` is summed resident memory in bytes.
+ */
+export interface ItemMetrics {
+	id: string;
+	cpuPercent: number;
+	memoryBytes: number;
 }
 
 /**
@@ -69,6 +81,18 @@ export function statusDot(status: Status): string {
 		error: '✖ error',
 	};
 	return map[status];
+}
+
+/**
+ * Format a byte count as a compact human string (e.g. 134217728 → "128 MB").
+ * Uses binary units; falls back to "0 B" for zero/negatives.
+ */
+export function formatBytes(bytes: number): string {
+	if (bytes <= 0) return '0 B';
+	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+	const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+	const value = bytes / 1024 ** exp;
+	return `${value < 10 && exp > 0 ? value.toFixed(1) : Math.round(value)} ${units[exp]}`;
 }
 
 /**

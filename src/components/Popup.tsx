@@ -8,7 +8,7 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { matchesSearch, splitFavorites, type ManagedItem, type Status } from '../model';
+import { matchesSearch, splitFavorites, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { stopAll } from '../ipc';
 import { ServiceRow } from './ServiceRow';
 
@@ -16,6 +16,7 @@ interface PopupProps {
 	items: ManagedItem[];
 	statuses: Map<string, Status>;
 	lastErrors: Map<string, string>;
+	metrics: Map<string, ItemMetrics>;
 	onChange: () => void;
 	onAdd: () => void;
 	onEdit: (item: ManagedItem) => void;
@@ -27,6 +28,7 @@ export function Popup({
 	items,
 	statuses,
 	lastErrors,
+	metrics,
 	onChange,
 	onAdd,
 	onEdit,
@@ -51,6 +53,7 @@ export function Popup({
 			item={item}
 			status={statusOf(item)}
 			lastError={lastErrors.get(item.id)}
+			metrics={metrics.get(item.id)}
 			index={index}
 			onChange={onChange}
 			onEdit={onEdit}
