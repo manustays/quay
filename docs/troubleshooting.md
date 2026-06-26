@@ -3,7 +3,7 @@
 Common issues and how to fix them. Per-item logs are your best friend — find them at:
 
 ```
-~/Library/Application Support/com.abhi.menubar-service-manager/logs/<id>.log
+~/Library/Application Support/com.abhi.quay/logs/<id>.log
 ```
 
 ## `cargo` not found
@@ -33,7 +33,7 @@ A locally-built app isn't signed, so Gatekeeper blocks the first launch. Either:
 - **Right-click** the app → **Open** → **Open**, or
 - Clear the quarantine flag:
   ```bash
-  xattr -dr com.apple.quarantine "/Applications/Menubar Service Manager.app"
+  xattr -dr com.apple.quarantine "/Applications/Quay.app"
   ```
 
 For a build that opens with no warning, sign and notarize it — see [Packaging](packaging.md).
@@ -98,7 +98,7 @@ Toggle it in **Settings**. You can verify/remove it under **System Settings → 
 Quit the app, then remove its data directory and relaunch with a clean slate:
 
 ```bash
-rm -rf "~/Library/Application Support/com.abhi.menubar-service-manager"
+rm -rf "~/Library/Application Support/com.abhi.quay"
 ```
 
 If only the config is bad, the app already auto-recovers: a corrupt `config.json` is moved to `config.bad.json` on launch and replaced with defaults.
@@ -111,4 +111,4 @@ Fix: re-run and approve the “control Finder / System Events” prompt, or pre-
 
 ## Still stuck?
 
-Open an issue at <https://github.com/manustays/menubar-cli-launcher/issues> with your macOS version + chip, what you did, and the relevant log output.
+Open an issue at <https://github.com/manustays/quay/issues> with your macOS version + chip, what you did, and the relevant log output.

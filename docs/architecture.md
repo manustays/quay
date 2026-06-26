@@ -1,6 +1,6 @@
 # Architecture
 
-A contributor-facing overview of how Menubar Service Manager is built. For the original decisions and rationale, see the [design spec](specs/2026-06-26-menubar-service-manager-design.md).
+A contributor-facing overview of how Quay is built. For the original decisions and rationale, see the [design spec](specs/2026-06-26-menubar-service-manager-design.md).
 
 ## Big picture
 
@@ -34,6 +34,7 @@ Each module has a single responsibility:
 | `brew` | Wrap `brew services start/stop/list` and parse the list output into per-formula statuses. |
 | `supervisor` | Spawn a background item via `zsh -lc "<cmd>"` in its **own process group** (`setsid`), redirect stdout/stderr to `logs/<id>.log`, and stop it by signalling the group (SIGTERM, escalating to SIGKILL). Also **adopts** orphaned services across app restarts: `adopt` (handle-less, PID-only), `pids_listening`/`parse_lsof_pids` (find listeners via `lsof`), and `stop_port` (free a port by killing its listeners). See [process reattachment](process-reattach.md). |
 | `health` | The pure `decide_status` function (PID liveness × port/HTTP reachability → status), the TCP/HTTP probes, and the background poll loop that emits `status_changed`. |
+| `metrics` | Per-process CPU%/memory sampling via `sysinfo`. A visibility-gated loop (`AppState.visible`) samples only while the popover is open, aggregates each item's whole process tree (pure `aggregate_tree`), and emits `metrics_changed`. See [metrics](metrics.md). |
 | `terminal` | Build the shell line and drive Terminal.app / iTerm2 via `osascript` (open a folder, or run a `terminal`-mode item). |
 | `state` | `AppState` — shared mutable state behind `Mutex`es: the loaded config, the map of running children, the status map, and the error map, plus a `suppress_hide` flag and the data dir. |
 | `commands` | All `#[tauri::command]` handlers, plus `init_state`. |
@@ -73,6 +74,12 @@ A single background thread runs every `pollIntervalSec`:
 - It calls `set_status`, which emits `status_changed` **only when the status actually changed** (so the UI isn't spammed).
 
 The poll loop deliberately releases the `running` lock before doing the (blocking) port/HTTP probe, so a slow probe never stalls command handlers.
+
+### Metrics sampling
+
+A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it idle-ticks every 500 ms and does no sampling work.
+
+Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta, then sums each item's whole process tree with the pure `aggregate_tree` helper. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
 
 ### Shutdown
 

@@ -5,13 +5,13 @@ All state is stored in a single JSON file. You normally edit it through the app'
 ## Location
 
 ```
-~/Library/Application Support/com.abhi.menubar-service-manager/config.json
+~/Library/Application Support/com.abhi.quay/config.json
 ```
 
 Per-item logs live alongside it:
 
 ```
-~/Library/Application Support/com.abhi.menubar-service-manager/logs/<id>.log
+~/Library/Application Support/com.abhi.quay/logs/<id>.log
 ```
 
 The file is written atomically (temp file + rename) on every change. If it ever becomes unreadable or corrupt, the app backs it up to `config.bad.json` and starts fresh with defaults — so a bad edit won't crash the app.
@@ -33,6 +33,7 @@ The file is written atomically (temp file + rename) on every change. If it ever 
 |-------|------|---------|-------------|
 | `terminalApp` | `"Terminal"` \| `"iTerm"` | `"Terminal"` | Which terminal emulator the "open terminal" action and `terminal`-mode items use. |
 | `pollIntervalSec` | number | `3` | How often (seconds) the background loop re-checks each item's status. Minimum 1. |
+| `metricsIntervalSec` | number | `10` | How often (seconds) per-process CPU%/memory are sampled **while the popover is open**. No sampling happens while it's closed. Minimum 1. See [metrics](metrics.md). |
 | `browser` | string | `"default"` | Reserved; the browser action currently always uses the system default browser. |
 | `launchAtLogin` | boolean | `false` | Whether the app is registered as a macOS login item. Toggle via Settings (it also calls the OS API). |
 
@@ -96,6 +97,7 @@ Runtime state (PIDs, current status, log handles) is **not** persisted — it li
   "settings": {
     "terminalApp": "iTerm",
     "pollIntervalSec": 2,
+    "metricsIntervalSec": 10,
     "browser": "default",
     "launchAtLogin": true
   },

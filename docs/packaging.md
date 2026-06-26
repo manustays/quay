@@ -15,8 +15,8 @@ Outputs:
 
 | Artifact | Path |
 |----------|------|
-| App bundle | `src-tauri/target/release/bundle/macos/Menubar Service Manager.app` |
-| Disk image | `src-tauri/target/release/bundle/dmg/Menubar Service Manager_0.1.0_<arch>.dmg` |
+| App bundle | `src-tauri/target/release/bundle/macos/Quay.app` |
+| Disk image | `src-tauri/target/release/bundle/dmg/Quay_0.1.0_<arch>.dmg` |
 
 `<arch>` is `aarch64` on Apple Silicon or `x64` on Intel. An unsigned build runs locally but triggers a Gatekeeper warning on other machines (see [Installation](installation.md#app-cant-be-opened-because-it-is-from-an-unidentified-developer)).
 
@@ -95,10 +95,10 @@ Tauri will sign, notarize, and staple the ticket to the bundle. The resulting `.
 
 ```bash
 # signature
-codesign --verify --deep --strict --verbose=2 "src-tauri/target/release/bundle/macos/Menubar Service Manager.app"
+codesign --verify --deep --strict --verbose=2 "src-tauri/target/release/bundle/macos/Quay.app"
 
 # notarization / Gatekeeper assessment
-spctl -a -vvv -t install "src-tauri/target/release/bundle/macos/Menubar Service Manager.app"
+spctl -a -vvv -t install "src-tauri/target/release/bundle/macos/Quay.app"
 ```
 
 A notarized app reports `source=Notarized Developer ID` and `accepted`.
@@ -130,7 +130,7 @@ You can automate signed, notarized builds in GitHub Actions with [`tauri-apps/ta
 `npm run tauri build` compiles the app and bundles the `.app`, then fails when building the `.dmg`:
 
 ```
-Bundling Menubar Service Manager_0.1.0_aarch64.dmg ...
+Bundling Quay_0.1.0_aarch64.dmg ...
      Running bundle_dmg.sh
 failed to bundle project: error running bundle_dmg.sh
 ```

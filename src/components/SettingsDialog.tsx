@@ -80,6 +80,16 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 							/>
 						</div>
 
+						<div className="grid gap-1.5">
+							<Label className="text-xs text-muted-foreground">Metrics interval (sec)</Label>
+							<Input
+								type="number"
+								min={1}
+								value={settings.metricsIntervalSec}
+								onChange={(e) => set({ metricsIntervalSec: Number(e.target.value) || 10 })}
+							/>
+						</div>
+
 						<label className="flex items-center justify-between gap-2 text-[13px]">
 							<span>Launch at login</span>
 							<Switch

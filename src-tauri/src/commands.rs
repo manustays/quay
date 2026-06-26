@@ -124,6 +124,7 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		statuses: std::sync::Mutex::new(std::collections::HashMap::new()),
 		errors: std::sync::Mutex::new(std::collections::HashMap::new()),
 		suppress_hide: std::sync::atomic::AtomicBool::new(false),
+		visible: std::sync::atomic::AtomicBool::new(false),
 	}
 }
 
@@ -319,9 +320,8 @@ pub fn tail_log(app: AppHandle, id: String, lines: usize) -> Result<String, AppE
 /// returns only the formula name keys. Returns an empty vec if brew is unavailable.
 #[tauri::command]
 pub fn list_brew_formulae() -> Vec<String> {
-	let Ok(out) = std::process::Command::new("brew").args(["services", "list"]).output() else {
+	let Some(text) = brew::services_list_raw() else {
 		return vec![];
 	};
-	let text = String::from_utf8_lossy(&out.stdout);
 	brew::parse_brew_list(&text).into_keys().collect()
 }

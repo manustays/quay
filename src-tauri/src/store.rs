@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 /// Ensure and return the app's data directory, creating `logs/` subdirectory as well.
 pub fn config_dir() -> Result<PathBuf, AppError> {
 	let base = dirs::data_dir().ok_or_else(|| AppError::Message("no data dir".into()))?;
-	let dir = base.join("com.abhi.menubar-service-manager");
+	let dir = base.join("com.abhi.quay");
 	std::fs::create_dir_all(dir.join("logs"))?;
 	Ok(dir)
 }

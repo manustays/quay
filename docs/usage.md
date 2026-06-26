@@ -1,6 +1,6 @@
 # Usage
 
-This guide walks through the day-to-day use of Menubar Service Manager.
+This guide walks through the day-to-day use of Quay.
 
 ## The popover
 
@@ -25,6 +25,8 @@ Each row shows a colored dot:
 | ✖ red | `error` | Process exited unexpectedly, or a start/stop failed (hover the dot for the message) |
 
 Status is refreshed automatically by a background poll (every few seconds, configurable). You never need to manually refresh.
+
+Running rows also show live **CPU% · memory** next to the port — sampled only while the popover is open, every 10s by default. See [metrics](metrics.md).
 
 ### Row actions
 
@@ -97,11 +99,12 @@ The header **Stop all** button (with confirmation) stops every running backgroun
 
 - **Terminal app** — `Terminal` (default) or `iTerm`. Used for the "open terminal" action and `terminal`-mode items.
 - **Poll interval (sec)** — how often status is checked (default 3).
+- **Metrics interval (sec)** — how often per-process CPU%/memory are sampled while the popover is open (default 10). See [metrics](metrics.md).
 - **Launch at login** — register/unregister the app as a macOS login item.
 
 ## Where things live
 
-- **Config:** `~/Library/Application Support/com.abhi.menubar-service-manager/config.json`
-- **Logs:** `~/Library/Application Support/com.abhi.menubar-service-manager/logs/<id>.log` (one per item)
+- **Config:** `~/Library/Application Support/com.abhi.quay/config.json`
+- **Logs:** `~/Library/Application Support/com.abhi.quay/logs/<id>.log` (one per item)
 
 See [Configuration](configuration.md) for the full file format.
