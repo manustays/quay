@@ -340,6 +340,13 @@ pub fn tail_log(app: AppHandle, id: String, lines: usize) -> Result<String, AppE
 	Ok(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
 }
 
+/// List installed terminal apps for the settings picker. Terminal.app is always
+/// present; others appear when their `.app` bundle or CLI binary is found.
+#[tauri::command]
+pub fn get_terminals() -> Vec<String> {
+	terminal::installed_terminals()
+}
+
 /// List formula names known to `brew services`.
 ///
 /// Runs `brew services list`, parses the output via `brew::parse_brew_list`, and

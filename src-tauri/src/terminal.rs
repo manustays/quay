@@ -96,6 +96,21 @@ fn resolve_cli(bin: &str) -> Option<String> {
 	(!p.is_empty()).then_some(p)
 }
 
+/// Display names of every supported terminal that is installed: Terminal.app
+/// (always), any whose `.app` bundle is present, or whose CLI binary is on the
+/// login-shell PATH (covers brew-installed CLIs with no `.app`).
+pub fn installed_terminals() -> Vec<String> {
+	registry()
+		.iter()
+		.filter(|t| {
+			t.always
+				|| app_bundle_installed(t.app_bundle)
+				|| t.cli_bin.map(|b| resolve_cli(b).is_some()).unwrap_or(false)
+		})
+		.map(|t| t.name.to_string())
+		.collect()
+}
+
 /// Run `osascript -e <script>`, returning stderr text on failure.
 fn run_osascript(script: &str) -> Result<(), AppError> {
 	run_command("osascript", &["-e".to_string(), script.to_string()])

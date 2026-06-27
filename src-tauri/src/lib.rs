@@ -61,6 +61,7 @@ pub fn run() {
 			commands::stop_all,
 			commands::open_browser,
 			commands::open_terminal,
+			commands::get_terminals,
 			commands::tail_log,
 			commands::list_brew_formulae,
 			commands::list_docker_images,
