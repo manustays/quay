@@ -19,7 +19,7 @@ import {
 	SelectValue,
 } from '@/components/ui/select';
 import type { Settings } from '../model';
-import { getSettings, updateSettings } from '../ipc';
+import { getSettings, updateSettings, getTerminals } from '../ipc';
 
 interface SettingsDialogProps {
 	open: boolean;
@@ -30,9 +30,13 @@ interface SettingsDialogProps {
 /** Settings dialog. Ports settings.ts; preserves unedited fields (e.g. `browser`) via spread. */
 export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogProps): React.JSX.Element {
 	const [settings, setSettings] = useState<Settings | null>(null);
+	const [terminals, setTerminals] = useState<string[]>([]);
 
 	useEffect(() => {
-		if (open) void getSettings().then(setSettings);
+		if (open) {
+			void getSettings().then(setSettings);
+			void getTerminals().then(setTerminals);
+		}
 	}, [open]);
 
 	const set = (patch: Partial<Settings>) =>
@@ -64,8 +68,11 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 							<Select value={settings.terminalApp} onValueChange={(v) => set({ terminalApp: v })}>
 								<SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
 								<SelectContent>
-									<SelectItem value="Terminal">Terminal</SelectItem>
-									<SelectItem value="iTerm">iTerm</SelectItem>
+									{Array.from(new Set([...terminals, settings.terminalApp]))
+										.filter(Boolean)
+										.map((name) => (
+											<SelectItem key={name} value={name}>{name}</SelectItem>
+										))}
 								</SelectContent>
 							</Select>
 						</div>

@@ -19,6 +19,9 @@ export const getStatuses = () => invoke<ItemStatus[]>('get_statuses');
 export const getSettings = () => invoke<Settings>('get_settings');
 export const updateSettings = (settings: Settings) => invoke<void>('update_settings', { settings });
 
+/** List terminal apps detected as installed, for the settings picker. */
+export const getTerminals = () => invoke<string[]>('get_terminals');
+
 /**
  * List formula names known to `brew services`.
  * Returns an empty array when Homebrew is unavailable.
