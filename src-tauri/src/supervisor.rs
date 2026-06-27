@@ -3,6 +3,34 @@ use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::OnceLock;
+
+/// PATH as seen by the user's interactive login shell, resolved once and cached.
+///
+/// A `.app` launched from Finder inherits a minimal PATH, and `zsh -lc` is a
+/// *non-interactive* login shell that never sources `~/.zshrc` — where version
+/// managers (nvm, asdf, pyenv, …) typically extend PATH. So binaries like `n8n`
+/// are missing even though they work in a normal terminal. We ask an *interactive*
+/// login shell (`-ilc`) for its PATH a single time and inject it into spawned
+/// commands, keeping interactive `.zshrc` side effects (prompt init, `exec zsh`,
+/// `compinit`, …) confined to this one cached probe instead of every service start.
+///
+/// The PATH is the last non-empty line of stdout, so framework chatter printed
+/// before it (e.g. `exec zsh`) is ignored. Returns `None` if the probe fails or
+/// yields nothing, in which case callers fall back to the inherited PATH.
+pub fn interactive_path() -> Option<&'static str> {
+	static PATH: OnceLock<Option<String>> = OnceLock::new();
+	PATH.get_or_init(|| {
+		let out = Command::new("/bin/zsh").args(["-ilc", "print -rn -- $PATH"]).output().ok()?;
+		if !out.status.success() {
+			return None;
+		}
+		let raw = String::from_utf8_lossy(&out.stdout);
+		let path = raw.lines().rev().map(str::trim).find(|l| !l.is_empty())?;
+		Some(path.to_string())
+	})
+	.as_deref()
+}
 
 /// A tracked background process and its log file path.
 ///
@@ -25,11 +53,12 @@ impl Running {
 
 /// Spawn a background item via login shell in its own process group, logging to file.
 ///
-/// Runs `zsh -lc "<start_cmd>"` with:
+/// Runs `/bin/zsh -lc "<start_cmd>"` with:
 /// - cwd set to `item.dir`
 /// - stdout+stderr appended to `logs_dir/<id>.log`
 /// - `setsid()` called in a `pre_exec` hook so the child becomes a session/process-group leader
-/// - any `item.env` entries merged into the child's environment
+/// - PATH set from [`interactive_path`] (so nvm/asdf/pyenv binaries resolve), then
+///   any `item.env` entries merged on top (so the user can still override PATH)
 pub fn spawn_background(item: &ManagedItem, logs_dir: &Path) -> Result<Running, AppError> {
 	let cmd_str = item
 		.start_cmd
@@ -47,7 +76,7 @@ pub fn spawn_background(item: &ManagedItem, logs_dir: &Path) -> Result<Running, 
 		.open(&log_path)?;
 	let log_err = log.try_clone()?;
 
-	let mut cmd = Command::new("zsh");
+	let mut cmd = Command::new("/bin/zsh");
 	cmd.arg("-lc")
 		.arg(&cmd_str)
 		.current_dir(&dir)
@@ -55,6 +84,9 @@ pub fn spawn_background(item: &ManagedItem, logs_dir: &Path) -> Result<Running, 
 		.stderr(Stdio::from(log_err))
 		.stdin(Stdio::null());
 
+	if let Some(path) = interactive_path() {
+		cmd.env("PATH", path);
+	}
 	for (k, v) in &item.env {
 		cmd.env(k, v);
 	}
@@ -185,7 +217,8 @@ mod tests {
 		ManagedItem {
 			id: "test-id".into(), name: "t".into(), kind: ItemKind::Project,
 			dir: Some(dir.into()), start_cmd: Some(cmd.into()), stop_cmd: None,
-			port: None, run_mode: RunMode::Background, brew_formula: None, order: 0,
+			port: None, run_mode: RunMode::Background, brew_formula: None,
+			docker_image: None, container_name: None, order: 0,
 			favorite: false, env: BTreeMap::new(), health_path: None, auto_start: false,
 		}
 	}
