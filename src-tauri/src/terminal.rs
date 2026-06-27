@@ -1,5 +1,6 @@
 use crate::model::AppError;
 use std::collections::BTreeMap;
+use std::path::Path;
 use std::process::Command;
 
 /// How a terminal is launched.
@@ -129,12 +130,28 @@ fn run_command(program: &str, args: &[String]) -> Result<(), AppError> {
 	}
 }
 
-/// Build the shell line run inside the terminal: cd + env exports + command.
+/// Build the shell line run inside the terminal: (optional pid capture) + cd +
+/// env exports + command.
 ///
-/// Single-quote-escapes `dir` and each env value so that paths and values
-/// containing single quotes are handled correctly (using `'\''` escaping).
-pub fn build_command_line(dir: &str, env: &BTreeMap<String, String>, cmd: &str) -> String {
-	let mut parts = vec![format!("cd '{}'", dir.replace('\'', "'\\''"))];
+/// When `pidfile` is set, the line starts with `echo $$ > '<pidfile>'` so the
+/// terminal's controlling shell records its own PID — `$$` is the PID of the shell
+/// that owns the tab, which lives until the window/tab is closed (it survives the
+/// `keepalive_shell` `exec`, since `exec` keeps the PID). The app polls that PID's
+/// liveness so a closed terminal flips to Stopped.
+///
+/// Single-quote-escapes `dir`, the pidfile path, and each env value so that paths
+/// and values containing single quotes are handled correctly (using `'\''`).
+pub fn build_command_line(
+	dir: &str,
+	env: &BTreeMap<String, String>,
+	cmd: &str,
+	pidfile: Option<&Path>,
+) -> String {
+	let mut parts = Vec::new();
+	if let Some(pf) = pidfile {
+		parts.push(format!("echo $$ > '{}'", pf.to_string_lossy().replace('\'', "'\\''")));
+	}
+	parts.push(format!("cd '{}'", dir.replace('\'', "'\\''")));
 	for (k, v) in env {
 		parts.push(format!("export {}='{}'", k, v.replace('\'', "'\\''")));
 	}
@@ -147,7 +164,7 @@ pub fn build_command_line(dir: &str, env: &BTreeMap<String, String>, cmd: &str) 
 /// `app_name` is the terminal display name matching `Settings::terminal_app`
 /// (e.g. `"Terminal"`, `"iTerm"`, `"Ghostty"`).
 pub fn open_folder(app_name: &str, dir: &str) -> Result<(), AppError> {
-	run_in_terminal(app_name, dir, &BTreeMap::new(), "clear")
+	run_in_terminal(app_name, dir, &BTreeMap::new(), "clear", None)
 }
 
 /// Open a terminal window and run `cmd` in `dir` with the given env exports.
@@ -161,8 +178,9 @@ pub fn run_in_terminal(
 	dir: &str,
 	env: &BTreeMap<String, String>,
 	cmd: &str,
+	pidfile: Option<&Path>,
 ) -> Result<(), AppError> {
-	let line = build_command_line(dir, env, cmd);
+	let line = build_command_line(dir, env, cmd, pidfile);
 	let spec = spec(app_name)
 		.ok_or_else(|| AppError::Message(format!("unknown terminal: {app_name}")))?;
 	match &spec.strategy {
@@ -198,10 +216,20 @@ mod tests {
 	fn builds_command_with_env_exports() {
 		let mut env = BTreeMap::new();
 		env.insert("FOO".to_string(), "bar".to_string());
-		let line = build_command_line("/tmp/app", &env, "npm run dev");
+		let line = build_command_line("/tmp/app", &env, "npm run dev", None);
 		assert!(line.starts_with("cd '/tmp/app'"));
 		assert!(line.contains("export FOO='bar'"));
 		assert!(line.ends_with("npm run dev"));
+	}
+
+	#[test]
+	fn pidfile_prepends_pid_capture_without_touching_command() {
+		let env = BTreeMap::new();
+		let pf = Path::new("/tmp/quay/logs/abc.term.pid");
+		let line = build_command_line("/tmp/app", &env, "cd sub && npm run dev", Some(pf));
+		// PID capture is the first segment; the command is preserved verbatim.
+		assert!(line.starts_with("echo $$ > '/tmp/quay/logs/abc.term.pid' && cd '/tmp/app'"));
+		assert!(line.ends_with("cd sub && npm run dev"));
 	}
 
 	#[test]

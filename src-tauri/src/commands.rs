@@ -23,6 +23,53 @@ pub fn persist_pids(state: &AppState) {
 	let _ = store::save_pids(&state.dir, &snapshot);
 }
 
+/// Poll `pidfile` for a PID written by a freshly launched terminal shell.
+///
+/// The shell writes `echo $$ > pidfile` asynchronously after the launch command
+/// (`osascript`/`open`) returns, so we retry briefly. Returns the parsed PID, or
+/// `None` if it never appears within the budget (≈2 s).
+fn read_pidfile(pidfile: &std::path::Path) -> Option<u32> {
+	for _ in 0..20 {
+		if let Ok(text) = std::fs::read_to_string(pidfile) {
+			if let Ok(pid) = text.trim().parse::<u32>() {
+				return Some(pid);
+			}
+		}
+		std::thread::sleep(std::time::Duration::from_millis(100));
+	}
+	None
+}
+
+/// Stop every tracked process **except** terminal items on app shutdown.
+///
+/// Terminal items are user-owned windows: quitting Quay must not close the user's
+/// Codeburn/Claude session. Their PIDs are kept in `running` and persisted to
+/// `pids.json` so the next launch can reattach and restore Running. Background/brew/
+/// docker entries are stopped as before. Replaces the old "stop everything + clear
+/// pids.json" shutdown.
+pub fn shutdown_stop_non_terminal(state: &AppState) {
+	let terminal_ids: std::collections::HashSet<String> = {
+		let cfg = state.config.lock().unwrap();
+		cfg.items
+			.iter()
+			.filter(|i| matches!(i.run_mode, crate::model::RunMode::Terminal))
+			.map(|i| i.id.clone())
+			.collect()
+	};
+	// Drain the non-terminal entries out under a scoped lock; leave terminals in.
+	let to_stop: Vec<supervisor::Running> = {
+		let mut running = state.running.lock().unwrap();
+		let ids: Vec<String> =
+			running.keys().filter(|id| !terminal_ids.contains(*id)).cloned().collect();
+		ids.into_iter().filter_map(|id| running.remove(&id)).collect()
+	};
+	for mut r in to_stop {
+		let _ = supervisor::stop(&mut r);
+	}
+	// Persist the survivors (terminal items) for reattach on next launch.
+	persist_pids(state);
+}
+
 /// Return all registered items in their current order.
 #[tauri::command]
 pub fn get_items(state: State<AppState>) -> Vec<ManagedItem> {
@@ -241,10 +288,34 @@ pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
 				set_status(&app, &id, Status::Starting);
 			}
 			RunMode::Terminal => {
+				// Already tracked and alive (e.g. reattached at launch, then hit again
+				// by the auto-start loop) — don't open a second window.
+				let already_alive = {
+					let mut running = state.running.lock().unwrap();
+					running.get_mut(&id).map(|r| supervisor::is_alive(r)).unwrap_or(false)
+				};
+				if already_alive {
+					set_status(&app, &id, Status::Running);
+					return Ok(());
+				}
 				let dir = item.dir.clone().ok_or_else(|| AppError::Message("no dir".into()))?;
 				let cmd = item.start_cmd.clone().ok_or_else(|| AppError::Message("no cmd".into()))?;
 				let app_name = state.config.lock().unwrap().settings.terminal_app.clone();
-				terminal::run_in_terminal(&app_name, &dir, &item.env, &cmd)?;
+				let logs = state.dir.join("logs");
+				std::fs::create_dir_all(&logs)?;
+				// The terminal's shell writes its own PID here so we can poll liveness
+				// (the process is unowned — launched inside Terminal/iTerm/etc.).
+				let pidfile = logs.join(format!("{id}.term.pid"));
+				let _ = std::fs::remove_file(&pidfile);
+				terminal::run_in_terminal(&app_name, &dir, &item.env, &cmd, Some(&pidfile))?;
+				// If the PID never lands (slow launch / write failure) we fall back to
+				// the pre-fix behavior — Running, untracked. No worse than before.
+				if let Some(pid) = read_pidfile(&pidfile) {
+					let log_path = logs.join(format!("{id}.log"));
+					state.running.lock().unwrap().insert(id.clone(), supervisor::adopt(pid, log_path));
+					persist_pids(&state);
+					let _ = std::fs::remove_file(&pidfile);
+				}
 				set_status(&app, &id, Status::Running);
 			}
 		},
@@ -278,20 +349,35 @@ pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
 				supervisor::stop_port(p);
 			}
 		}
+		// Drop a terminal item's pid-capture file if one lingered.
+		let _ = std::fs::remove_file(state.dir.join("logs").join(format!("{id}.term.pid")));
 		persist_pids(&state);
 	}
 	set_status(&app, &id, Status::Stopped);
 	Ok(())
 }
 
-/// Stop all running items (background + brew).
+/// Stop all running items (background + brew). Terminal items are excluded — they
+/// are user-owned windows that Stop-All deliberately leaves open.
 #[tauri::command]
 pub fn stop_all(app: AppHandle) -> Result<(), AppError> {
 	let ids: Vec<String> = {
 		let state = app.state::<AppState>();
-		let running: Vec<String> = state.running.lock().unwrap().keys().cloned().collect();
 		let statuses = state.statuses.lock().unwrap();
 		let cfg = state.config.lock().unwrap();
+		// Terminal items live in `running` for liveness tracking but must not be torn
+		// down by Stop-All (parity with leaving them open on app quit).
+		let is_terminal = |id: &str| {
+			cfg.items.iter().any(|i| i.id == id && matches!(i.run_mode, RunMode::Terminal))
+		};
+		let running: Vec<String> = state
+			.running
+			.lock()
+			.unwrap()
+			.keys()
+			.filter(|id| !is_terminal(id))
+			.cloned()
+			.collect();
 		// Brew: always considered (launchctl is the source of truth). Docker: only
 		// containers we currently see Running/Starting, so Stop-All never tears down
 		// a container that merely happens to be configured but was started elsewhere.

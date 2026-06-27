@@ -16,6 +16,38 @@ pub fn decide_status(p: &Probe) -> Status {
 	if p.port_open { Status::Running } else { Status::Starting }
 }
 
+/// Decide a terminal item's status. Pure.
+///
+/// `pid_alive` is `Some` when we captured the terminal's shell PID at start:
+/// `Some(true)` while the window is open, `Some(false)` once it's closed. `None`
+/// means we have no PID (capture failed, or a legacy/untracked item), in which case
+/// we fall back to the old port-or-last-known behavior. A closed terminal is a
+/// normal `Stopped`, not an error.
+pub fn terminal_status(
+	pid_alive: Option<bool>,
+	has_port: bool,
+	port_open: bool,
+	current: Option<Status>,
+) -> Status {
+	match pid_alive {
+		Some(true) => {
+			if has_port {
+				if port_open { Status::Running } else { Status::Starting }
+			} else {
+				Status::Running
+			}
+		}
+		Some(false) => Status::Stopped,
+		None => {
+			if has_port {
+				if port_open { Status::Running } else { Status::Starting }
+			} else {
+				current.unwrap_or(Status::Stopped)
+			}
+		}
+	}
+}
+
 /// True if a TCP connection to 127.0.0.1:port succeeds within 300ms.
 pub fn port_open(port: u16) -> bool {
 	let Ok(mut addrs) = format!("127.0.0.1:{port}").to_socket_addrs() else { return false; };
@@ -111,10 +143,27 @@ pub fn poll_once(app: &AppHandle) {
 						}
 					}
 				}
-				RunMode::Terminal => match item.port {
-					Some(p) => if port_open(p) { Status::Running } else { Status::Starting },
-					None => current.unwrap_or(Status::Stopped),
-				},
+				RunMode::Terminal => {
+					// Liveness of the captured terminal-shell PID, if we have one.
+					let pid_alive: Option<bool> = {
+						let mut running = state.running.lock().unwrap();
+						running.get_mut(&item.id).map(|r| crate::supervisor::is_alive(r))
+					};
+					let port_up = match item.port {
+						Some(p) => port_open(p),
+						None => false,
+					};
+					let s = terminal_status(pid_alive, item.port.is_some(), port_up, current);
+					// The window closed: drop the dead entry (scope the lock, then
+					// persist outside it — persist_pids locks `running` too).
+					if matches!(pid_alive, Some(false)) {
+						let removed = { state.running.lock().unwrap().remove(&item.id).is_some() };
+						if removed {
+							crate::commands::persist_pids(&state);
+						}
+					}
+					s
+				}
 			},
 		};
 		set_status(app, &item.id, status);
@@ -141,5 +190,25 @@ mod tests {
 	#[test]
 	fn alive_port_closed_is_starting() {
 		assert_eq!(decide_status(&Probe { pid_alive: true, has_port: true, port_open: false }), Status::Starting);
+	}
+
+	#[test]
+	fn terminal_alive_no_port_is_running() {
+		assert_eq!(terminal_status(Some(true), false, false, None), Status::Running);
+	}
+	#[test]
+	fn terminal_alive_port_open_is_running_else_starting() {
+		assert_eq!(terminal_status(Some(true), true, true, None), Status::Running);
+		assert_eq!(terminal_status(Some(true), true, false, None), Status::Starting);
+	}
+	#[test]
+	fn terminal_dead_pid_is_stopped() {
+		// Closed window — Stopped, not Error.
+		assert_eq!(terminal_status(Some(false), false, false, Some(Status::Running)), Status::Stopped);
+	}
+	#[test]
+	fn terminal_untracked_no_port_keeps_last_known() {
+		assert_eq!(terminal_status(None, false, false, Some(Status::Running)), Status::Running);
+		assert_eq!(terminal_status(None, false, false, None), Status::Stopped);
 	}
 }

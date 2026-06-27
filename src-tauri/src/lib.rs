@@ -127,6 +127,15 @@ pub fn run() {
 				}
 
 				commands::persist_pids(&st);
+
+				// Sweep stale terminal pid-capture files left by a mid-launch kill.
+				if let Ok(entries) = std::fs::read_dir(st.dir.join("logs")) {
+					for e in entries.flatten() {
+						if e.file_name().to_string_lossy().ends_with(".term.pid") {
+							let _ = std::fs::remove_file(e.path());
+						}
+					}
+				}
 			}
 
 			// Start the background status-poll loop.
@@ -183,20 +192,10 @@ pub fn run() {
 				})
 				.on_menu_event(|app, event| {
 					if event.id().as_ref() == "quit" {
-						// Drain running children, drop the lock, then stop each one
-						// so we don't hold the mutex across a blocking stop call.
-						let children: Vec<_> = {
-							let st = app.state::<state::AppState>();
-							let mut map = st.running.lock().unwrap();
-							map.drain().collect()
-						};
-						for (_, mut r) in children {
-							let _ = supervisor::stop(&mut r);
-						}
-						// Children are stopped; clear pids.json so the next launch
-						// doesn't try to reattach to processes we just killed.
-						let dir = app.state::<state::AppState>().dir.clone();
-						let _ = store::save_pids(&dir, &std::collections::HashMap::new());
+						// Stop background/brew/docker children but leave terminal windows
+						// open; their PIDs are persisted so the next launch reattaches.
+						let st = app.state::<state::AppState>();
+						commands::shutdown_stop_non_terminal(&st);
 						app.exit(0);
 					}
 				})
@@ -232,15 +231,10 @@ pub fn run() {
 		.expect("error building app")
 		.run(|app_handle, event| {
 			if let tauri::RunEvent::ExitRequested { .. } = event {
+				// Match the quit handler: stop non-terminal children, keep terminal
+				// windows open, and persist their PIDs for reattach.
 				let st = app_handle.state::<state::AppState>();
-				{
-					let mut running = st.running.lock().unwrap();
-					for (_, r) in running.iter_mut() {
-						let _ = supervisor::stop(r);
-					}
-				}
-				// Match the quit handler: clear persisted PIDs after stopping.
-				let _ = store::save_pids(&st.dir, &std::collections::HashMap::new());
+				commands::shutdown_stop_non_terminal(&st);
 			}
 		});
 }
