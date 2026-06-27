@@ -2,7 +2,7 @@
 export type Status = 'stopped' | 'starting' | 'running' | 'error';
 
 /** Kind of managed item — mirrors the Rust `ItemKind` enum. */
-export type ItemKind = 'project' | 'brew' | 'agent' | 'docker';
+export type ItemKind = 'project' | 'brew' | 'cli' | 'docker';
 
 /** How a process is launched — mirrors the Rust `RunMode` enum. */
 export type RunMode = 'background' | 'terminal';

@@ -1,6 +1,6 @@
 # Docker service management
 
-Quay manages Docker containers alongside Project / Brew / Agent services. A Docker
+Quay manages Docker containers alongside Project / Brew / CLI services. A Docker
 service is the fourth `ItemKind` and — like Brew — bypasses `RunMode`, routing to
 a dedicated module instead of the background/terminal supervisor.
 

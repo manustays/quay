@@ -28,7 +28,7 @@ Each module has a single responsibility:
 
 | Module | Responsibility |
 |--------|----------------|
-| `model` | Shared types: `ManagedItem`, `Settings`, `AppConfig`, `ItemKind`, `RunMode`, `Status`, `ItemStatus`, `AppError`. The serde representations are the contract with the frontend. |
+| `model` | Shared types: `ManagedItem`, `Settings`, `AppConfig`, `ItemKind`, `RunMode`, `Status`, `ItemStatus`, `AppError`. The serde representations are the contract with the frontend. `ItemKind::Cli` carries `#[serde(alias = "agent")]` so configs written before the `agent`→`cli` rename still deserialize (and re-serialize back to the frontend as the canonical `"cli"`). |
 | `store` | Load/save `config.json` with an atomic temp-write + rename, and corrupt-file recovery (`config.bad.json` + defaults). Also persists the volatile `id → pid` map in `pids.json` for reattachment after an app restart. |
 | `detect` | Inspect a chosen folder (`package.json`, `requirements.txt`/`pyproject.toml`, `.env`) and suggest a name, start command, port, and kind. |
 | `brew` | Wrap `brew services start/stop/list` and parse the list output into per-formula statuses. |

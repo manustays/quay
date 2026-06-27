@@ -1,7 +1,7 @@
 [package]
 name = "quay"
 version = "0.1.0"
-description = "A native macOS menubar app to start, stop, and monitor your local dev services, Homebrew services, and terminal agents."
+description = "A native macOS menubar app to start, stop, and monitor your local dev services, Homebrew services, and CLI tools."
 authors = ["Kumar Abhishek <manustays@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/manustays/quay"

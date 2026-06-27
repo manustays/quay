@@ -45,7 +45,7 @@ Each registered service:
 {
   "id": "9f1c…",              // stable UUID; also the log filename
   "name": "myapp",
-  "kind": "project",          // "project" | "brew" | "agent"
+  "kind": "project",          // "project" | "brew" | "cli" | "docker" ("agent" still accepted as a legacy alias for "cli")
   "dir": "/Users/me/dev/myapp", // null for brew items
   "startCmd": "npm run dev",   // null for brew items
   "stopCmd": null,             // null = SIGTERM the owned child group; brew manages its own
@@ -66,8 +66,8 @@ Each registered service:
 |-------|------|-------|
 | `id` | string | UUID v4. Assigned automatically; don't reuse. Names the item's log file (`logs/<id>.log`). |
 | `name` | string | Display name. |
-| `kind` | `"project"` \| `"brew"` \| `"agent"` | Determines how the item is started and how status is read. |
-| `dir` | string \| null | Working directory. Required for `project`/`agent`; `null` for `brew`. |
+| `kind` | `"project"` \| `"brew"` \| `"cli"` \| `"docker"` | Determines how the item is started and how status is read. `"agent"` is accepted as a legacy alias for `"cli"`. |
+| `dir` | string \| null | Working directory. Required for `project`/`cli`; `null` for `brew`. |
 | `startCmd` | string \| null | Shell command run via `zsh -lc "<cmd>"` (so your PATH / nvm / pyenv resolve). `null` for `brew`. |
 | `stopCmd` | string \| null | Reserved. `null` means a background item is stopped by signalling its process group. |
 | `port` | number \| null | TCP port. Enables the browser button and the port-based status check. |

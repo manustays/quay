@@ -50,7 +50,7 @@ const STATUS_ACCENT: Record<Status, string> = {
 function descriptor(item: ManagedItem): string {
 	if (item.kind === 'brew') return 'brew';
 	if (item.kind === 'docker') return 'docker';
-	if (item.kind === 'agent') return 'agent';
+	if (item.kind === 'cli') return 'cli';
 	return item.runMode;
 }
 

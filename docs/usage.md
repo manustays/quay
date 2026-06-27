@@ -57,9 +57,9 @@ Background services managed by `brew services`.
 - No folder or start command needed.
 - Start/stop call `brew services start|stop <formula>`; status comes from `brew services list`.
 
-### 3. Terminal agents (`kind: agent`)
+### 3. CLI tools (`kind: cli`)
 
-Interactive, long-running tools you run in a real terminal (e.g. Claude Code or a custom agent).
+Standalone command-line tools and binaries — interactive long-running tools run in a real terminal (e.g. Claude Code or a custom agent), or headless commands run in the background.
 
 - **dir** + **startCmd** — e.g. `claude` in a project folder.
 - **runMode** — `terminal` (opens a Terminal/iTerm window you can type into).
@@ -69,12 +69,12 @@ Interactive, long-running tools you run in a real terminal (e.g. Claude Code or 
 | Mode | Behavior | Use for |
 |------|----------|---------|
 | `background` | App spawns the command as a hidden child process; stdout/stderr go to a log file. The app owns and can stop it. | Servers, brew |
-| `terminal` | App opens a Terminal/iTerm window running the command, so you can interact with it. The app does **not** own this process; stop is best-effort. | Interactive agents |
+| `terminal` | App opens a Terminal/iTerm window running the command, so you can interact with it. The app does **not** own this process; stop is best-effort. | Interactive CLI tools |
 
 ## Adding an item
 
 1. **+ Add**.
-2. For a project or agent: **Pick…** a folder. The app inspects it and pre-fills:
+2. For a project or CLI tool: **Pick…** a folder. The app inspects it and pre-fills:
    - `package.json` with a `dev`/`start`/`serve` script → `npm run <script>` and a port from `.env` if present.
    - `requirements.txt` / `pyproject.toml` → `python main.py`.
 3. For a brew service: set **kind = brew** and choose a formula (the field suggests installed formulae).

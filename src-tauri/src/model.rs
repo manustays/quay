@@ -4,7 +4,14 @@ use std::collections::BTreeMap;
 /// What kind of managed item this is.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum ItemKind { Project, Brew, Agent, Docker }
+pub enum ItemKind {
+	Project,
+	Brew,
+	/// `alias = "agent"` keeps configs written before the rename loadable.
+	#[serde(alias = "agent")]
+	Cli,
+	Docker,
+}
 
 /// How an item is launched.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -111,8 +118,21 @@ mod tests {
 	fn status_serializes_to_canonical_strings() {
 		assert_eq!(serde_json::to_string(&Status::Running).unwrap(), "\"running\"");
 		assert_eq!(serde_json::to_string(&ItemKind::Brew).unwrap(), "\"brew\"");
+		assert_eq!(serde_json::to_string(&ItemKind::Cli).unwrap(), "\"cli\"");
 		assert_eq!(serde_json::to_string(&ItemKind::Docker).unwrap(), "\"docker\"");
 		assert_eq!(serde_json::to_string(&RunMode::Terminal).unwrap(), "\"terminal\"");
+	}
+
+	#[test]
+	fn legacy_agent_kind_deserializes_as_cli() {
+		// Configs written before the Agent→Cli rename persisted `"kind":"agent"`.
+		// The serde alias must load them as `Cli` so the item isn't dropped to
+		// config.bad.json. Asserted at the ManagedItem level — the real load path.
+		let json = r#"{"id":"x","name":"n","kind":"agent","dir":"/tmp","startCmd":"claude",
+			"stopCmd":null,"port":null,"runMode":"terminal","brewFormula":null,"order":0,
+			"favorite":false,"healthPath":null,"autoStart":false}"#;
+		let item: ManagedItem = serde_json::from_str(json).unwrap();
+		assert_eq!(item.kind, ItemKind::Cli);
 	}
 
 	#[test]

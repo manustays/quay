@@ -197,7 +197,7 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 								<SelectItem value="project">Project</SelectItem>
 								<SelectItem value="brew">Homebrew service</SelectItem>
 								<SelectItem value="docker">Docker container</SelectItem>
-								<SelectItem value="agent">Agent</SelectItem>
+								<SelectItem value="cli">CLI</SelectItem>
 							</SelectContent>
 						</Select>
 					</Field>
