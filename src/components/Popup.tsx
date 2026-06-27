@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, CirclePower, Plus, Search, Settings, Zap } from 'lucide-react';
+import { ChevronRight, CirclePower, Plus, Search, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -10,6 +10,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { matchesSearch, splitFavorites, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { stopAll } from '../ipc';
+import { BuoyMark } from './BuoyMark';
 import { ServiceRow } from './ServiceRow';
 
 interface PopupProps {
@@ -64,14 +65,12 @@ export function Popup({
 		<div className="flex h-screen flex-col overflow-hidden rounded-xl border border-border/60 bg-background/55 text-[13px] backdrop-saturate-150">
 			{/* Brand bar */}
 			<header className="flex items-center gap-2 px-3.5 pt-3 pb-2">
-				<span className="flex size-6 items-center justify-center rounded-md bg-primary/10 text-primary">
-					<Zap className="size-3.5 fill-current" />
-				</span>
+				<BuoyMark className="size-6 shrink-0" />
 				<div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-					<h1 className="truncate text-[13px] font-semibold tracking-tight">
+					<h1 className="truncate font-heading text-[14px] font-semibold tracking-tight">
 						{__APP_NAME__}
 					</h1>
-					<span className="shrink-0 rounded-full bg-muted px-1.5 py-px text-[10px] font-medium text-muted-foreground tabular-nums">
+					<span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground tabular-nums">
 						v{__APP_VERSION__}
 					</span>
 				</div>
@@ -123,7 +122,7 @@ export function Popup({
 								others.map((item, i) => renderRow(item, favorites.length + i))
 							) : (
 								<Collapsible defaultOpen className="mt-0.5">
-									<CollapsibleTrigger className="group/more flex w-full items-center gap-1 rounded-md px-2 py-1.5 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
+									<CollapsibleTrigger className="group/more flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
 										<ChevronRight className="size-3 transition-transform group-data-[state=open]/more:rotate-90" />
 										More ({others.length})
 									</CollapsibleTrigger>
@@ -153,7 +152,7 @@ export function Popup({
 
 function SectionLabel({ children }: { children: React.ReactNode }): React.JSX.Element {
 	return (
-		<div className="px-2 pt-2 pb-1 text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+		<div className="px-2 pt-2 pb-1 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
 			{children}
 		</div>
 	);

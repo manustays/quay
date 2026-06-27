@@ -110,10 +110,10 @@ export function ServiceRow({
 				>
 					<span className={cn('size-2 shrink-0 rounded-full', STATUS_ACCENT[status])} />
 					<span className="flex min-w-0 flex-col">
-						<span className="truncate text-[13px] font-semibold leading-tight">
+						<span className="truncate font-heading text-[13px] font-semibold leading-tight">
 							{item.name}
 						</span>
-						<span className="flex items-center gap-1.5 leading-tight text-muted-foreground">
+						<span className="flex items-center gap-1.5 font-mono leading-tight text-muted-foreground">
 							{item.port != null && (
 								<span className="font-mono text-[11px]">:{item.port}</span>
 							)}

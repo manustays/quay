@@ -5,7 +5,8 @@
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-    --font-heading: var(--font-sans);
+    /* Space Grotesk for the app name / titles; falls back to the system stack. */
+    --font-heading: "Space Grotesk Variable", var(--font-sans);
     /* Native macOS system font — SF Pro. Deliberate: native feel is the goal. */
     --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
     --font-mono: ui-monospace, "SF Mono", Menlo, monospace;

@@ -11,6 +11,9 @@ the buoy body, and water waves. There are two products from it:
 ## Sources (committed, reproducible)
 - `src-tauri/icons/src/status-buoy.svg` — the monochrome glyph (root `color="#000000"`
   so `currentColor` renders black deterministically).
+- `src-tauri/icons/src/tray.svg` — menubar-tuned variant of the glyph (scaled ~0.9 and
+  nudged down so it sits optically centered next to neighbouring tray icons rather than
+  reading top-heavy). This is the source for `tray.png`.
 - `src-tauri/icons/src/app-icon.svg` — the 1024×1024 master (gradient squircle, white
   buoy, green glowing beacon). Big Sur grid: 824×824 body, `r=185`, 100px margin; the
   glyph is mapped via `translate(182 197) scale(30)`.
@@ -19,7 +22,7 @@ the buoy body, and water waves. There are two products from it:
 
 Menubar template icon (→ `src-tauri/icons/tray.png`, 44×44 = 22pt @2x, transparent RGBA):
 ```
-rsvg-convert -w 44 -h 44 src-tauri/icons/src/status-buoy.svg -o src-tauri/icons/tray.png
+rsvg-convert -w 44 -h 44 src-tauri/icons/src/tray.svg -o src-tauri/icons/tray.png
 ```
 
 App bundle icons (overwrites `32x32`, `128x128`, `128x128@2x`, `icon.png/.icns/.ico`,
