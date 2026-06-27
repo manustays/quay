@@ -1,12 +1,13 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22" color="#000000" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22" color="#000000" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
   <title>Quay Status Buoy (menubar)</title>
   <!--
-    Menubar-tuned variant of status-buoy.svg: the glyph is scaled to ~0.9 and
-    nudged down so its optical centre (the buoy body, not the small top beacon)
-    sits on the menubar mid-line. Keeps the icon from reading top-heavy next to
-    neighbouring tray icons.
+    Menubar-tuned variant of status-buoy.svg: the glyph is scaled up to fill the
+    canvas so it matches the visual height of neighbouring tray icons, and nudged
+    down so its optical centre (the buoy body, not the small top beacon) sits on
+    the menubar mid-line. stroke-width is reduced to 1.5 so the larger scale keeps
+    the same effective stroke weight (1.5 * 1.18 ~= 1.77) rather than bolding.
   -->
-  <g transform="translate(1.1 1.9) scale(0.9)">
+  <g transform="translate(11 11.5) scale(1.18) translate(-11 -11)">
     <path d="M9 7h4"/>
     <path d="M8 11h6"/>
     <path d="M8.5 7l-2 9h9l-2-9"/>
