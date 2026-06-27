@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Dark slate -> near-black vertical gradient for the rounded-square body. -->
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2A3340"/>
+      <stop offset="1" stop-color="#0E131B"/>
+    </linearGradient>
+    <!-- Subtle top sheen. -->
+    <linearGradient id="sheen" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="0.4" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="glow" x="-80%" y="-80%" width="260%" height="260%">
+      <feGaussianBlur stdDeviation="26"/>
+    </filter>
+    <filter id="softshadow" x="-30%" y="-30%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="10" flood-color="#000000" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- Rounded-square (Big Sur grid: 824x824, r=185, 100px margin). Corners stay transparent. -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="url(#sheen)"/>
+
+  <!-- Green status beacon (the buoy light) with a soft glow halo. -->
+  <circle cx="512" cy="332" r="78" fill="#34D058" opacity="0.45" filter="url(#glow)"/>
+  <circle cx="512" cy="332" r="42" fill="#34D058"/>
+  <circle cx="512" cy="332" r="42" fill="url(#sheen)"/>
+
+  <!-- White buoy line-art. Maps the 22-unit glyph: translate(182,197) scale(30). -->
+  <g transform="translate(182 197) scale(30)" fill="none" stroke="#ffffff"
+     stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#softshadow)">
+    <path d="M9 7h4"/>
+    <path d="M8 11h6"/>
+    <path d="M8.5 7l-2 9h9l-2-9"/>
+    <path d="M4.5 18c1.4-.9 2.8-.9 4.2 0s2.8.9 4.2 0 2.8-.9 4.6 0"/>
+  </g>
+</svg>

@@ -65,6 +65,11 @@ pub fn run() {
 			commands::set_suppress_hide,
 		])
 		.setup(|app| {
+			// Menubar-only: hide the dock icon (and Cmd-Tab entry). Accessory keeps
+			// the tray icon and lets the popover take focus when shown.
+			#[cfg(target_os = "macos")]
+			app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
 			let dir = store::config_dir()?;
 			app.manage(commands::init_state(dir));
 
@@ -140,7 +145,10 @@ pub fn run() {
 			let tray_menu = MenuBuilder::new(app).items(&[&quit]).build()?;
 
 			TrayIconBuilder::new()
-				.icon(app.default_window_icon().unwrap().clone())
+				// Monochrome buoy glyph rendered as a macOS template image so it
+				// auto-inverts (black/white) with the menubar's light/dark theme.
+				.icon(tauri::include_image!("icons/tray.png"))
+				.icon_as_template(true)
 				.menu(&tray_menu)
 				// Only show the context menu on right-click; left-click toggles the popover.
 				.show_menu_on_left_click(false)
