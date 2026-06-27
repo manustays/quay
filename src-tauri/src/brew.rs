@@ -92,6 +92,49 @@ pub fn parse_brew_list(output: &str) -> HashMap<String, Status> {
 	map
 }
 
+/// Raw stdout of `launchctl list`, or `None` if it couldn't be spawned.
+///
+/// `launchctl` lives at `/bin/launchctl` and is always on PATH, so no resolution
+/// dance (unlike [`brew_bin`]) is needed.
+pub fn launchctl_list_raw() -> Option<String> {
+	let out = Command::new("launchctl").arg("list").output().ok()?;
+	Some(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Prefix every Homebrew launchd job label carries.
+const HOMEBREW_LABEL_PREFIX: &str = "homebrew.mxcl.";
+
+/// Parse `launchctl list` output into formula → main PID.
+///
+/// Lines are `PID<whitespace>ExitStatus<whitespace>Label`. Only labels starting
+/// with `homebrew.mxcl.` are kept, and only when the PID column is numeric (a
+/// stopped job has `-` there, which is skipped). The formula key is the label with
+/// the prefix removed, so a versioned formula like `mysql@8.0` round-trips. On
+/// duplicate labels (e.g. the same formula from two Homebrew prefixes) the last
+/// line wins.
+pub fn parse_service_pids(output: &str) -> HashMap<String, u32> {
+	let mut map = HashMap::new();
+	for line in output.lines() {
+		let mut cols = line.split_whitespace();
+		let (Some(pid), Some(_status), Some(label)) = (cols.next(), cols.next(), cols.next())
+		else {
+			continue;
+		};
+		let Some(formula) = label.strip_prefix(HOMEBREW_LABEL_PREFIX) else {
+			continue;
+		};
+		let Ok(pid) = pid.parse::<u32>() else { continue };
+		map.insert(formula.to_string(), pid);
+	}
+	map
+}
+
+/// Main PIDs of running Homebrew launchd services, keyed by formula. Empty if
+/// `launchctl` couldn't be spawned.
+pub fn service_pids() -> HashMap<String, u32> {
+	launchctl_list_raw().map(|o| parse_service_pids(&o)).unwrap_or_default()
+}
+
 /// Current status of a brew formula (Stopped if brew missing or formula absent).
 pub fn brew_status(formula: &str) -> Status {
 	let Some(text) = services_list_raw() else {
@@ -171,5 +214,36 @@ mod tests {
 		assert_eq!(m.get("mysql"), Some(&Status::Running));
 		assert_eq!(m.get("mongodb"), Some(&Status::Stopped));
 		assert_eq!(m.get("redis"), Some(&Status::Error));
+	}
+
+	#[test]
+	fn parses_launchctl_service_pids() {
+		// Mix of tabs and spaces, a running job, a stopped job (`-` PID), a
+		// versioned formula, a non-homebrew label, and a short/malformed line.
+		let out = "PID\tStatus\tLabel\n\
+			61787\t0\thomebrew.mxcl.mysql\n\
+			-      14   homebrew.mxcl.mongodb-community\n\
+			512\t0\thomebrew.mxcl.mysql@8.0\n\
+			999\t0\tcom.apple.something\n\
+			garbage line\n";
+		let m = parse_service_pids(out);
+		// Running formula maps to its PID.
+		assert_eq!(m.get("mysql"), Some(&61787));
+		// Versioned formula round-trips with the version suffix intact.
+		assert_eq!(m.get("mysql@8.0"), Some(&512));
+		// Stopped job (`-` PID) is skipped.
+		assert_eq!(m.get("mongodb-community"), None);
+		// Non-homebrew labels are ignored; "Label" header line too.
+		assert_eq!(m.get("something"), None);
+		assert!(!m.contains_key("Label"));
+		// Only the two valid homebrew entries survive.
+		assert_eq!(m.len(), 2);
+	}
+
+	#[test]
+	fn parse_service_pids_duplicate_label_last_wins() {
+		// Same formula from two prefixes — deterministic last-line-wins.
+		let out = "100 0 homebrew.mxcl.redis\n200 0 homebrew.mxcl.redis\n";
+		assert_eq!(parse_service_pids(out).get("redis"), Some(&200));
 	}
 }

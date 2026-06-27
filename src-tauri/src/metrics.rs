@@ -6,6 +6,7 @@
 //! then aggregates each service's whole process tree (root PIDs + descendants) so
 //! wrapper processes (e.g. `npm` → `node`) report the real consumption.
 
+use crate::brew;
 use crate::model::Status;
 use crate::state::AppState;
 use crate::supervisor;
@@ -73,6 +74,15 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 		.map(|(id, r)| (id.clone(), r.pid))
 		.collect();
 
+	// Resolve launchd PIDs once per pass if any running/starting brew item exists.
+	// Brew services have no tracked PID (launchd owns them); this maps formula →
+	// main PID via `launchctl list`.
+	let want_brew = items.iter().any(|i| {
+		i.brew_formula.is_some()
+			&& matches!(statuses.get(&i.id), Some(Status::Running | Status::Starting))
+	});
+	let brew_pids = if want_brew { brew::service_pids() } else { HashMap::new() };
+
 	// Resolve root PIDs per item. A port is resolved at most once per pass.
 	let mut port_cache: HashMap<u16, Vec<u32>> = HashMap::new();
 	let mut item_roots: Vec<(String, Vec<u32>)> = Vec::new();
@@ -84,6 +94,12 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 		let mut roots: Vec<u32> = Vec::new();
 		if let Some(&pid) = tracked.get(&item.id) {
 			roots.push(pid);
+		}
+		// Brew services: their launchd main PID (descendants summed downstream).
+		if let Some(formula) = &item.brew_formula {
+			if let Some(&pid) = brew_pids.get(formula) {
+				roots.push(pid);
+			}
 		}
 		// Port-resolved listeners cover terminal/brew items and background
 		// servers whose tracked launcher PID has been reparented away.
