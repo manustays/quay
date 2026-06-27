@@ -20,8 +20,16 @@ import {
 	SelectValue,
 } from '@/components/ui/select';
 import type { ItemKind, ManagedItem, RunMode } from '../model';
-import { addItem, detectFolder, listBrewFormulae, setSuppressHide, updateItem } from '../ipc';
+import {
+	addItem,
+	detectFolder,
+	listBrewFormulae,
+	listDockerImages,
+	setSuppressHide,
+	updateItem,
+} from '../ipc';
 import { envToText, parseEnv } from '@/lib/env';
+import { ensureDockerDaemon } from '@/lib/docker';
 
 interface ServiceFormProps {
 	open: boolean;
@@ -43,6 +51,8 @@ function blank(): ManagedItem {
 		port: null,
 		runMode: 'background',
 		brewFormula: null,
+		dockerImage: null,
+		containerName: null,
 		order: 0,
 		favorite: false,
 		env: {},
@@ -57,6 +67,7 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 	const [envText, setEnvText] = useState('');
 	const [portText, setPortText] = useState('');
 	const [formulae, setFormulae] = useState<string[]>([]);
+	const [images, setImages] = useState<string[]>([]);
 	const isEdit = item !== null;
 
 	// Reset all fields whenever the dialog opens (for a fresh item or an edit).
@@ -75,7 +86,37 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 		}
 	}, [open, data.kind, formulae.length]);
 
+	// Load installed docker images once per open, only when kind === 'docker'.
+	// Returns empty when the daemon is down — the form shows a "Start Docker" hint.
+	useEffect(() => {
+		if (open && data.kind === 'docker' && images.length === 0) {
+			void listDockerImages().then(setImages).catch(() => {});
+		}
+	}, [open, data.kind, images.length]);
+
 	const set = (patch: Partial<ManagedItem>) => setData((d) => ({ ...d, ...patch }));
+
+	/** Autofill name / container / start command from a picked image (only when empty). */
+	const pickImage = (img: string) =>
+		setData((d) => {
+			const base = (img.split('/').pop() ?? img).split(':')[0];
+			const cn = d.containerName || base;
+			return {
+				...d,
+				dockerImage: img,
+				name: d.name || base,
+				containerName: cn,
+				// Port mapping (-p) can't be inferred from the image — left for the user.
+				startCmd: d.startCmd || `docker run --name ${cn} -d ${img}`,
+			};
+		});
+
+	/** Bring Docker up (prompt-then-start), then reload the image list. */
+	const startDockerAndReload = async () => {
+		if (await ensureDockerDaemon()) {
+			await listDockerImages().then(setImages).catch(() => {});
+		}
+	};
 
 	const pickFolder = async () => {
 		// Suppress hide-on-blur so the popover doesn't vanish behind the OS dialog.
@@ -100,6 +141,12 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 	};
 
 	const save = async () => {
+		// Docker items are joined to their container by name across status, stop,
+		// and metrics — it must be present.
+		if (data.kind === 'docker' && !data.containerName?.trim()) {
+			alert('Container name is required for a Docker service.');
+			return;
+		}
 		const result: ManagedItem = {
 			...data,
 			port: portText ? Number(portText) : null,
@@ -109,8 +156,15 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 			startCmd: data.startCmd || null,
 			stopCmd: data.stopCmd || null,
 			brewFormula: data.brewFormula || null,
+			dockerImage: data.dockerImage || null,
+			containerName: data.containerName?.trim() || null,
 			healthPath: data.healthPath || null,
 		};
+		// Adding a Docker service while the daemon is down: prompt to start it so the
+		// service is ready to run. Cancelling still saves the config.
+		if (!isEdit && data.kind === 'docker') {
+			await ensureDockerDaemon();
+		}
 		try {
 			if (isEdit) await updateItem(result);
 			else await addItem(result);
@@ -122,6 +176,7 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 	};
 
 	const isBrew = data.kind === 'brew';
+	const isDocker = data.kind === 'docker';
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -141,12 +196,13 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 							<SelectContent>
 								<SelectItem value="project">Project</SelectItem>
 								<SelectItem value="brew">Homebrew service</SelectItem>
+								<SelectItem value="docker">Docker container</SelectItem>
 								<SelectItem value="agent">Agent</SelectItem>
 							</SelectContent>
 						</Select>
 					</Field>
 
-					{!isBrew && (
+					{!isBrew && !isDocker && (
 						<Field label="Folder">
 							<div className="flex gap-1.5">
 								<Input value={data.dir ?? ''} readOnly placeholder="No folder" className="flex-1" />
@@ -155,6 +211,39 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 								</Button>
 							</div>
 						</Field>
+					)}
+
+					{isDocker && (
+						<>
+							<Field label="Image">
+								<Input
+									value={data.dockerImage ?? ''}
+									onChange={(e) => pickImage(e.target.value)}
+									list="docker-image-list"
+									placeholder="repo:tag"
+								/>
+								<datalist id="docker-image-list">
+									{images.map((img) => <option key={img} value={img} />)}
+								</datalist>
+								{images.length === 0 && (
+									<button
+										type="button"
+										onClick={startDockerAndReload}
+										className="mt-1 text-left text-[11px] text-muted-foreground underline-offset-2 hover:underline"
+									>
+										Docker isn't running — start it to list installed images
+									</button>
+								)}
+							</Field>
+
+							<Field label="Container name">
+								<Input
+									value={data.containerName ?? ''}
+									onChange={(e) => set({ containerName: e.target.value })}
+									placeholder="e.g. mongodb"
+								/>
+							</Field>
+						</>
 					)}
 
 					<Field label="Start command">
@@ -169,15 +258,17 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 						<Input type="number" value={portText} onChange={(e) => setPortText(e.target.value)} />
 					</Field>
 
-					<Field label="Run mode">
-						<Select value={data.runMode} onValueChange={(v) => set({ runMode: v as RunMode })}>
-							<SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
-							<SelectContent>
-								<SelectItem value="background">Background</SelectItem>
-								<SelectItem value="terminal">Terminal</SelectItem>
-							</SelectContent>
-						</Select>
-					</Field>
+					{!isDocker && (
+						<Field label="Run mode">
+							<Select value={data.runMode} onValueChange={(v) => set({ runMode: v as RunMode })}>
+								<SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+								<SelectContent>
+									<SelectItem value="background">Background</SelectItem>
+									<SelectItem value="terminal">Terminal</SelectItem>
+								</SelectContent>
+							</Select>
+						</Field>
+					)}
 
 					{isBrew && (
 						<Field label="Brew formula">

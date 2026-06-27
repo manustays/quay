@@ -26,6 +26,22 @@ export const updateSettings = (settings: Settings) => invoke<void>('update_setti
 export const listBrewFormulae = () => invoke<string[]>('list_brew_formulae');
 
 /**
+ * List installed Docker image "repo:tag" strings for add-service autocomplete.
+ * Returns an empty array when Docker is unavailable (CLI missing or daemon down).
+ */
+export const listDockerImages = () => invoke<string[]>('list_docker_images');
+
+/** True if the Docker daemon is currently responding. */
+export const dockerDaemonRunning = () => invoke<boolean>('docker_daemon_running');
+
+/**
+ * Launch Docker Desktop and wait for the daemon. Resolves `true` if it came up
+ * within the backend timeout (~60s), `false` on timeout; rejects if Docker
+ * Desktop could not be launched.
+ */
+export const startDockerDaemon = () => invoke<boolean>('start_docker_daemon');
+
+/**
  * Subscribe to backend status-changed events.
  * The callback receives an {@link ItemStatus} payload each time a service
  * transitions state. Returns a Promise that resolves to an unlisten function —

@@ -2,7 +2,7 @@
 export type Status = 'stopped' | 'starting' | 'running' | 'error';
 
 /** Kind of managed item — mirrors the Rust `ItemKind` enum. */
-export type ItemKind = 'project' | 'brew' | 'agent';
+export type ItemKind = 'project' | 'brew' | 'agent' | 'docker';
 
 /** How a process is launched — mirrors the Rust `RunMode` enum. */
 export type RunMode = 'background' | 'terminal';
@@ -21,6 +21,10 @@ export interface ManagedItem {
 	port: number | null;
 	runMode: RunMode;
 	brewFormula: string | null;
+	/** Docker image "repo:tag" — drives add-form autofill only. */
+	dockerImage: string | null;
+	/** Container name — the join key for Docker status, stop, and metrics. */
+	containerName: string | null;
 	order: number;
 	favorite: boolean;
 	env: Record<string, string>;

@@ -1,6 +1,7 @@
 pub mod brew;
 pub mod commands;
 pub mod detect;
+pub mod docker;
 pub mod health;
 pub mod metrics;
 pub mod model;
@@ -62,6 +63,9 @@ pub fn run() {
 			commands::open_terminal,
 			commands::tail_log,
 			commands::list_brew_formulae,
+			commands::list_docker_images,
+			commands::docker_daemon_running,
+			commands::start_docker_daemon,
 			commands::set_suppress_hide,
 		])
 		.setup(|app| {
@@ -108,7 +112,10 @@ pub fn run() {
 				let mut claimed_ports = std::collections::HashSet::new();
 				for item in &items {
 					if !matches!(item.run_mode, model::RunMode::Background) { continue; }
-					if matches!(item.kind, model::ItemKind::Brew) { continue; }
+					// Brew + Docker items must not enter the running map: brew is tracked
+					// via launchctl, Docker via `docker ps` (containers have no host PID,
+					// and a published port maps through docker-proxy, not the container).
+					if matches!(item.kind, model::ItemKind::Brew | model::ItemKind::Docker) { continue; }
 					let Some(p) = item.port else { continue; };
 					let already = st.running.lock().unwrap().contains_key(&item.id);
 					if already { claimed_ports.insert(p); continue; }
@@ -130,12 +137,22 @@ pub fn run() {
 			// Auto-start any items flagged with auto_start = true.
 			{
 				let app_handle = app.handle().clone();
-				let ids: Vec<String> = {
+				let auto: Vec<(String, bool)> = {
 					let st = app_handle.state::<state::AppState>();
 					let cfg = st.config.lock().unwrap();
-					cfg.items.iter().filter(|i| i.auto_start).map(|i| i.id.clone()).collect()
+					cfg.items.iter().filter(|i| i.auto_start)
+						.map(|i| (i.id.clone(), matches!(i.kind, model::ItemKind::Docker)))
+						.collect()
 				};
-				for id in ids {
+				// If a Docker item wants to auto-start but the daemon is down, launch
+				// Docker Desktop and wait once — there is no UI to prompt at launch.
+				let needs_docker = auto.iter().any(|(_, is_docker)| *is_docker);
+				if needs_docker && !docker::daemon_running() {
+					if docker::start_daemon().is_ok() {
+						docker::wait_for_daemon(std::time::Duration::from_secs(60));
+					}
+				}
+				for (id, _) in auto {
 					let _ = commands::start_item(app_handle.clone(), id);
 				}
 			}

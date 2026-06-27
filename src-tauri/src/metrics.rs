@@ -7,7 +7,7 @@
 //! wrapper processes (e.g. `npm` → `node`) report the real consumption.
 
 use crate::brew;
-use crate::model::Status;
+use crate::model::{ItemKind, ManagedItem, Status};
 use crate::state::AppState;
 use crate::supervisor;
 use serde::Serialize;
@@ -91,6 +91,11 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 			Some(Status::Running | Status::Starting) => {}
 			_ => continue,
 		}
+		// Docker containers run in the VM — no host PID to aggregate. They are
+		// sampled separately via `docker stats` (see `collect_docker`).
+		if matches!(item.kind, ItemKind::Docker) {
+			continue;
+		}
 		let mut roots: Vec<u32> = Vec::new();
 		if let Some(&pid) = tracked.get(&item.id) {
 			roots.push(pid);
@@ -115,33 +120,113 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 			item_roots.push((item.id.clone(), roots));
 		}
 	}
-	if item_roots.is_empty() {
+	// Host-process metrics (skipped entirely when no host-PID item is active).
+	let mut out: Vec<ItemMetrics> = if item_roots.is_empty() {
+		Vec::new()
+	} else {
+		// Two refreshes 200 ms apart give cpu_usage() a valid delta to measure.
+		let mut sys = System::new();
+		sys.refresh_processes(ProcessesToUpdate::All, true);
+		std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
+		sys.refresh_processes(ProcessesToUpdate::All, true);
+
+		let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
+		let mut samples: HashMap<u32, (f32, u64)> = HashMap::new();
+		for (pid, proc_) in sys.processes() {
+			let pid_u = pid.as_u32();
+			samples.insert(pid_u, (proc_.cpu_usage(), proc_.memory()));
+			if let Some(parent) = proc_.parent() {
+				children.entry(parent.as_u32()).or_default().push(pid_u);
+			}
+		}
+
+		item_roots
+			.into_iter()
+			.map(|(id, roots)| {
+				let (cpu_percent, memory_bytes) = aggregate_tree(&roots, &children, &samples);
+				ItemMetrics { id, cpu_percent, memory_bytes }
+			})
+			.collect()
+	};
+
+	// Docker container metrics, sampled via `docker stats`, merged in by item id.
+	out.extend(collect_docker(&items, &statuses));
+	out
+}
+
+/// Sample CPU%/memory for Docker items currently Running/Starting via a single
+/// `docker stats --no-stream`. Returns empty (and skips spawning `docker`) when no
+/// Docker item is active. Containers are matched to items by `container_name`.
+fn collect_docker(items: &[ManagedItem], statuses: &HashMap<String, Status>) -> Vec<ItemMetrics> {
+	// (item id, container name) for active Docker items only.
+	let active: Vec<(&str, &str)> = items
+		.iter()
+		.filter(|i| matches!(i.kind, ItemKind::Docker))
+		.filter(|i| matches!(statuses.get(&i.id), Some(Status::Running | Status::Starting)))
+		.filter_map(|i| i.container_name.as_deref().map(|n| (i.id.as_str(), n)))
+		.collect();
+	if active.is_empty() {
 		return Vec::new();
 	}
 
-	// Two refreshes 200 ms apart give cpu_usage() a valid delta to measure.
-	let mut sys = System::new();
-	sys.refresh_processes(ProcessesToUpdate::All, true);
-	std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
-	sys.refresh_processes(ProcessesToUpdate::All, true);
-
-	let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
-	let mut samples: HashMap<u32, (f32, u64)> = HashMap::new();
-	for (pid, proc_) in sys.processes() {
-		let pid_u = pid.as_u32();
-		samples.insert(pid_u, (proc_.cpu_usage(), proc_.memory()));
-		if let Some(parent) = proc_.parent() {
-			children.entry(parent.as_u32()).or_default().push(pid_u);
-		}
-	}
-
-	item_roots
+	let Some(raw) = crate::docker::stats_raw() else { return Vec::new(); };
+	let by_name = parse_docker_stats(&raw);
+	active
 		.into_iter()
-		.map(|(id, roots)| {
-			let (cpu_percent, memory_bytes) = aggregate_tree(&roots, &children, &samples);
-			ItemMetrics { id, cpu_percent, memory_bytes }
+		.filter_map(|(id, name)| {
+			by_name.get(name).map(|&(cpu_percent, memory_bytes)| ItemMetrics {
+				id: id.to_string(),
+				cpu_percent,
+				memory_bytes,
+			})
 		})
 		.collect()
+}
+
+/// Parse `docker stats` output into container name → (cpu%, memory bytes). Pure.
+///
+/// CPU like `"12.34%"` → 12.34 (may exceed 100 on multi-core). Memory takes the
+/// usage side of `"128MiB / 2GiB"` and converts it via [`parse_mem_size`].
+/// Malformed lines are skipped.
+pub fn parse_docker_stats(output: &str) -> HashMap<String, (f32, u64)> {
+	let mut map = HashMap::new();
+	for line in output.lines() {
+		let mut cols = line.split('\t');
+		let (Some(name), Some(cpu), Some(mem)) = (cols.next(), cols.next(), cols.next()) else {
+			continue;
+		};
+		let name = name.trim();
+		if name.is_empty() {
+			continue;
+		}
+		let cpu_percent = cpu.trim().trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
+		let usage = mem.split('/').next().unwrap_or("").trim();
+		map.insert(name.to_string(), (cpu_percent, parse_mem_size(usage)));
+	}
+	map
+}
+
+/// Parse a docker memory size like `"128MiB"`, `"1.5GiB"`, `"512KiB"`, `"700kB"`,
+/// or `"0B"` into bytes. Handles both binary (KiB/MiB/GiB) and decimal (kB/MB/GB)
+/// units; unknown/missing units fall back to raw bytes. Pure.
+pub fn parse_mem_size(s: &str) -> u64 {
+	let s = s.trim();
+	let split = s.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(s.len());
+	let (num, unit) = s.split_at(split);
+	let n: f64 = num.trim().parse().unwrap_or(0.0);
+	let mult: f64 = match unit.trim() {
+		"B" | "" => 1.0,
+		"kB" | "KB" => 1e3,
+		"KiB" => 1024.0,
+		"MB" => 1e6,
+		"MiB" => 1024f64.powi(2),
+		"GB" => 1e9,
+		"GiB" => 1024f64.powi(3),
+		"TB" => 1e12,
+		"TiB" => 1024f64.powi(4),
+		_ => 1.0,
+	};
+	(n * mult) as u64
 }
 
 /// Spawn the visibility-gated metrics loop. Idle-ticks every 500 ms while hidden
@@ -202,5 +287,30 @@ mod tests {
 		let children: HashMap<u32, Vec<u32>> = HashMap::new();
 		let s = samples(&[]);
 		assert_eq!(aggregate_tree(&[999], &children, &s), (0.0, 0));
+	}
+
+	#[test]
+	fn parse_mem_size_handles_binary_and_decimal_units() {
+		assert_eq!(parse_mem_size("128MiB"), 134_217_728);
+		assert_eq!(parse_mem_size("1.5GiB"), 1_610_612_736);
+		assert_eq!(parse_mem_size("512KiB"), 524_288);
+		assert_eq!(parse_mem_size("700kB"), 700_000);
+		assert_eq!(parse_mem_size("0B"), 0);
+		// Whitespace and unknown/missing units are tolerated.
+		assert_eq!(parse_mem_size("  256MiB "), 268_435_456);
+		assert_eq!(parse_mem_size("42"), 42);
+	}
+
+	#[test]
+	fn parse_docker_stats_maps_name_to_cpu_and_bytes() {
+		let out = "mongodb\t0.50%\t128MiB / 1.5GiB\n\
+			busy\t250.00%\t2GiB / 8GiB\n\
+			\tbad line with no name\n";
+		let m = parse_docker_stats(out);
+		assert_eq!(m.get("mongodb"), Some(&(0.5, 134_217_728)));
+		// CPU may exceed 100% across cores.
+		assert_eq!(m.get("busy"), Some(&(250.0, 2_147_483_648)));
+		// The malformed leading-tab line is skipped.
+		assert_eq!(m.len(), 2);
 	}
 }

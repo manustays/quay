@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 /// What kind of managed item this is.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
-pub enum ItemKind { Project, Brew, Agent }
+pub enum ItemKind { Project, Brew, Agent, Docker }
 
 /// How an item is launched.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -28,6 +28,10 @@ pub struct ManagedItem {
 	pub port: Option<u16>,
 	#[serde(rename = "runMode")] pub run_mode: RunMode,
 	#[serde(rename = "brewFormula")] pub brew_formula: Option<String>,
+	/// Docker image "repo:tag" — drives add-form autofill only (not operational).
+	#[serde(rename = "dockerImage", default)] pub docker_image: Option<String>,
+	/// Container name — the join key for Docker status, stop, and metrics.
+	#[serde(rename = "containerName", default)] pub container_name: Option<String>,
 	pub order: u32,
 	pub favorite: bool,
 	#[serde(default)] pub env: BTreeMap<String, String>,
@@ -107,7 +111,21 @@ mod tests {
 	fn status_serializes_to_canonical_strings() {
 		assert_eq!(serde_json::to_string(&Status::Running).unwrap(), "\"running\"");
 		assert_eq!(serde_json::to_string(&ItemKind::Brew).unwrap(), "\"brew\"");
+		assert_eq!(serde_json::to_string(&ItemKind::Docker).unwrap(), "\"docker\"");
 		assert_eq!(serde_json::to_string(&RunMode::Terminal).unwrap(), "\"terminal\"");
+	}
+
+	#[test]
+	fn docker_item_deserializes_without_optional_fields() {
+		// A config written before Docker fields existed (and without them) must load.
+		let json = r#"{"id":"x","name":"n","kind":"docker","dir":null,"startCmd":"docker run -d img",
+			"stopCmd":null,"port":null,"runMode":"background","brewFormula":null,"order":0,
+			"favorite":false,"healthPath":null,"autoStart":false}"#;
+		let item: ManagedItem = serde_json::from_str(json).unwrap();
+		assert_eq!(item.kind, ItemKind::Docker);
+		assert_eq!(item.docker_image, None);
+		assert_eq!(item.container_name, None);
+		assert!(item.env.is_empty());
 	}
 
 	#[test]

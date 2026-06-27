@@ -67,13 +67,23 @@ pub fn poll_once(app: &AppHandle) {
 	let items = state.config.lock().unwrap().items.clone();
 	for item in items {
 		let current = state.statuses.lock().unwrap().get(&item.id).copied();
-		if matches!(current, None | Some(Status::Stopped)) && !matches!(item.kind, ItemKind::Brew) {
+		// Brew + Docker are polled even when Stopped: their state lives outside the
+		// app (launchctl / `docker ps`), so a container started or stopped elsewhere
+		// is still reflected.
+		if matches!(current, None | Some(Status::Stopped))
+			&& !matches!(item.kind, ItemKind::Brew | ItemKind::Docker)
+		{
 			continue; // never started; leave as-is
 		}
 		let status = match item.kind {
 			ItemKind::Brew => {
 				item.brew_formula.as_deref()
 					.map(crate::brew::brew_status)
+					.unwrap_or(Status::Stopped)
+			}
+			ItemKind::Docker => {
+				item.container_name.as_deref()
+					.map(crate::docker::docker_status)
 					.unwrap_or(Status::Stopped)
 			}
 			_ => match item.run_mode {

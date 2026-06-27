@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { ensureDockerDaemon } from '@/lib/docker';
 import { formatBytes, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import {
 	deleteItem,
@@ -48,6 +49,7 @@ const STATUS_ACCENT: Record<Status, string> = {
 /** Short descriptor shown after the port (kept honest to the data we have). */
 function descriptor(item: ManagedItem): string {
 	if (item.kind === 'brew') return 'brew';
+	if (item.kind === 'docker') return 'docker';
 	if (item.kind === 'agent') return 'agent';
 	return item.runMode;
 }
@@ -84,6 +86,27 @@ export function ServiceRow({
 			alert(String(err));
 		}
 		onChange();
+	};
+
+	/**
+	 * Toggle the service. Docker starts first ensure the daemon is up (prompt then
+	 * launch Docker Desktop); the `DOCKER_DAEMON_DOWN` backend sentinel is a fallback
+	 * if the daemon dropped between the check and the call.
+	 */
+	const startOrStop = async () => {
+		if (running) return stopItem(item.id);
+		if (item.kind === 'docker') {
+			if (!(await ensureDockerDaemon())) return;
+			try {
+				return await startItem(item.id);
+			} catch (err) {
+				if (String(err).includes('DOCKER_DAEMON_DOWN') && (await ensureDockerDaemon())) {
+					return startItem(item.id);
+				}
+				throw err;
+			}
+		}
+		return startItem(item.id);
 	};
 
 	return (
@@ -131,7 +154,7 @@ export function ServiceRow({
 				<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 group-data-[state=open]:opacity-100">
 					<RowAction
 						label={running ? 'Stop' : 'Start'}
-						onClick={act(() => (running ? stopItem(item.id) : startItem(item.id)))}
+						onClick={act(startOrStop)}
 					>
 						{running ? <Square /> : <Play />}
 					</RowAction>

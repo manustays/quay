@@ -3,7 +3,8 @@ import { matchesSearch, splitFavorites, statusDot, type ManagedItem } from './mo
 
 const base: ManagedItem = {
 	id: '1', name: 'myapp', kind: 'project', dir: '/x', startCmd: 'npm run dev',
-	stopCmd: null, port: 5173, runMode: 'background', brewFormula: null, order: 0,
+	stopCmd: null, port: 5173, runMode: 'background', brewFormula: null,
+	dockerImage: null, containerName: null, order: 0,
 	favorite: false, env: {}, healthPath: null, autoStart: false,
 };
 

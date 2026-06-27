@@ -137,7 +137,7 @@ pub fn set_suppress_hide(state: tauri::State<AppState>, value: bool) {
 // ── Start / stop commands ────────────────────────────────────────────────────
 
 use crate::model::{ItemKind, ItemStatus, RunMode, Status};
-use crate::{brew, supervisor, terminal};
+use crate::{brew, docker, supervisor, terminal};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Set an item's status and emit `status_changed` only if it changed.
@@ -214,6 +214,17 @@ pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
 			brew::brew_start(&f)?;
 			set_status(&app, &id, Status::Running);
 		}
+		ItemKind::Docker => {
+			// Fail safe if the daemon is down. The frontend pre-checks and prompts,
+			// but auto-start (and any missed check) reaches here directly — the
+			// `DOCKER_DAEMON_DOWN` sentinel lets the FE recover with the same prompt.
+			if !docker::daemon_running() {
+				return Err(AppError::Message("DOCKER_DAEMON_DOWN".into()));
+			}
+			docker::docker_start(&item)?;
+			// Mark Starting; the poll loop flips to Running once `docker ps` confirms.
+			set_status(&app, &id, Status::Starting);
+		}
 		_ => match item.run_mode {
 			RunMode::Background => {
 				// If the configured port is already serving — e.g. a previous instance
@@ -248,6 +259,10 @@ pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
 	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
 	if let ItemKind::Brew = item.kind {
 		if let Some(f) = &item.brew_formula { brew::brew_stop(f)?; }
+	} else if let ItemKind::Docker = item.kind {
+		if let Some(n) = item.container_name.as_deref().filter(|n| !n.trim().is_empty()) {
+			docker::docker_stop(n)?;
+		}
 	} else {
 		// Take the entry out under a scoped lock, then stop after the guard drops
 		// so the mutex is never held across the (potentially blocking) stop call.
@@ -275,9 +290,20 @@ pub fn stop_all(app: AppHandle) -> Result<(), AppError> {
 	let ids: Vec<String> = {
 		let state = app.state::<AppState>();
 		let running: Vec<String> = state.running.lock().unwrap().keys().cloned().collect();
-		let brews: Vec<String> = state.config.lock().unwrap().items.iter()
-			.filter(|i| matches!(i.kind, ItemKind::Brew)).map(|i| i.id.clone()).collect();
-		running.into_iter().chain(brews).collect()
+		let statuses = state.statuses.lock().unwrap();
+		let cfg = state.config.lock().unwrap();
+		// Brew: always considered (launchctl is the source of truth). Docker: only
+		// containers we currently see Running/Starting, so Stop-All never tears down
+		// a container that merely happens to be configured but was started elsewhere.
+		let extra: Vec<String> = cfg.items.iter().filter(|i| match i.kind {
+			ItemKind::Brew => true,
+			ItemKind::Docker => matches!(
+				statuses.get(&i.id),
+				Some(Status::Running | Status::Starting)
+			),
+			_ => false,
+		}).map(|i| i.id.clone()).collect();
+		running.into_iter().chain(extra).collect()
 	};
 	for id in ids { let _ = stop_item(app.clone(), id); }
 	Ok(())
@@ -324,4 +350,25 @@ pub fn list_brew_formulae() -> Vec<String> {
 		return vec![];
 	};
 	brew::parse_brew_list(&text).into_keys().collect()
+}
+
+/// List installed docker image "repo:tag" strings for the add-service autocomplete.
+/// Empty when Docker is unavailable (CLI missing or daemon down).
+#[tauri::command]
+pub fn list_docker_images() -> Vec<String> {
+	docker::list_images()
+}
+
+/// True if the Docker daemon is currently responding.
+#[tauri::command]
+pub fn docker_daemon_running() -> bool {
+	docker::daemon_running()
+}
+
+/// Launch Docker Desktop and wait up to ~60s for the daemon. Returns Ok(true) if
+/// it came up, Ok(false) on timeout, Err if Docker Desktop couldn't be launched.
+#[tauri::command]
+pub fn start_docker_daemon() -> Result<bool, AppError> {
+	docker::start_daemon()?;
+	Ok(docker::wait_for_daemon(std::time::Duration::from_secs(60)))
 }
