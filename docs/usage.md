@@ -38,7 +38,7 @@ Running rows also show live **CPU% · memory** next to the port — sampled only
 
 Click the **body** of a row to expand it — you'll see the tail of its log file, plus **Edit**, **Delete**, and toggles for **Favorite** and **Auto-start**.
 
-## The three kinds of items
+## The four kinds of items
 
 ### 1. Project servers (`kind: project`)
 
@@ -57,7 +57,18 @@ Background services managed by `brew services`.
 - No folder or start command needed.
 - Start/stop call `brew services start|stop <formula>`; status comes from `brew services list`.
 
-### 3. CLI tools (`kind: cli`)
+### 3. Docker containers (`kind: docker`)
+
+A container run from a local Docker image.
+
+- **dockerImage** — the image to run, e.g. `postgres:16` or `redis`. The form autocompletes from images already pulled on your machine (`docker images`).
+- **containerName** — the container name (required). Quay reuses an existing container with this name if one is present, otherwise runs a fresh one.
+- **port** — optional; used for the status/health check and the browser button.
+- If the Docker daemon isn't running when you hit **start**, Quay offers to start it (Docker Desktop) and waits for it to come up before running the container. Status comes from `docker ps`; CPU/memory come from `docker stats` (see [metrics](metrics.md)).
+
+Requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed. See [Docker services](docker-services.md) for the full model.
+
+### 4. CLI tools (`kind: cli`)
 
 Standalone command-line tools and binaries — interactive long-running tools run in a real terminal (e.g. Claude Code or a custom agent), or headless commands run in the background.
 
@@ -77,7 +88,7 @@ Standalone command-line tools and binaries — interactive long-running tools ru
 2. For a project or CLI tool: **Pick…** a folder. The app inspects it and pre-fills:
    - `package.json` with a `dev`/`start`/`serve` script → `npm run <script>` and a port from `.env` if present.
    - `requirements.txt` / `pyproject.toml` → `python main.py`.
-3. For a brew service: set **kind = brew** and choose a formula (the field suggests installed formulae).
+3. For a brew service: set **kind = brew** and choose a formula (the field suggests installed formulae). For a Docker container: set **kind = docker**, pick an **image** (autocompleted from your local images), and give it a **container name**.
 4. Adjust any field:
    - **Env** — one `KEY=VALUE` per line, merged into the process environment. _Use for dev variables only — don't store real secrets here; the config file is plain text._
    - **Health path** — optional. If set (e.g. `/health`), status uses an HTTP `GET` to `http://localhost:<port><healthPath>` and treats a 2xx as healthy. If empty, status uses a plain TCP port check.
@@ -91,7 +102,7 @@ Expand a row → **Edit** to reopen the form pre-filled, or **Delete** (with con
 
 ## Stop all
 
-The header **Stop all** button (with confirmation) stops every running background service and every app-started brew service in one go. Terminal-mode items are best-effort.
+The header **Stop all** button (with confirmation) stops every running background service, app-started brew service, and Docker container in one go. Terminal-mode items are best-effort.
 
 ## Settings
 

@@ -16,7 +16,7 @@ Outputs:
 | Artifact | Path |
 |----------|------|
 | App bundle | `src-tauri/target/release/bundle/macos/Quay.app` |
-| Disk image | `src-tauri/target/release/bundle/dmg/Quay_0.1.0_<arch>.dmg` |
+| Disk image | `src-tauri/target/release/bundle/dmg/Quay_0.5.0_<arch>.dmg` |
 
 `<arch>` is `aarch64` on Apple Silicon or `x64` on Intel. An unsigned build runs locally but triggers a Gatekeeper warning on other machines (see [Installation](installation.md#app-cant-be-opened-because-it-is-from-an-unidentified-developer)).
 
@@ -113,15 +113,46 @@ Bump the version in **both**:
 (Keep them in sync — Tauri uses `tauri.conf.json`; npm scripts read `package.json`.) Then build, and tag the release in git:
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+git tag v0.5.0
+git push origin v0.5.0
 ```
 
-Attach the `.dmg` to a GitHub Release.
+Pushing the tag triggers the CI pipeline (§6), which builds the universal `.dmg` and drafts a GitHub Release with it attached — just review and publish. (To build and attach a `.dmg` by hand instead, run §1–§4 locally and upload it to a new Release.)
 
-## 6. CI (optional)
+## 6. CI release pipeline
 
-You can automate signed, notarized builds in GitHub Actions with [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action), storing the certificate (`.p12`, base64-encoded) and the Apple credentials as encrypted repository secrets. The same environment variables above (`APPLE_ID`, `APPLE_PASSWORD`, `APPLE_TEAM_ID`, `APPLE_SIGNING_IDENTITY`, plus `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD`) drive the signing step. See the Tauri ["Distributing → macOS"](https://tauri.app/distribute/) guide for a ready-made workflow.
+The repo ships a GitHub Actions workflow at [`.github/workflows/release.yml`](../.github/workflows/release.yml) that builds and publishes releases automatically.
+
+**Trigger.** Push a version tag:
+
+```bash
+# bump version in both files first (see §5), then:
+git tag v0.5.0
+git push origin v0.5.0
+```
+
+**What it does.** On a `macos-latest` runner it installs the `aarch64`/`x86_64` Rust targets, runs [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action) with `--target universal-apple-darwin` (one `.dmg` for both architectures), and creates a **draft** GitHub Release with the `.dmg` attached. Review the draft, then publish it — that's what the README's "Download for macOS" link resolves to (`releases/latest`).
+
+**Signing is conditional.** The workflow runs **unsigned by default** and automatically signs + notarizes only when these are set as encrypted repository secrets (Settings → Secrets and variables → Actions):
+
+| Secret | Value |
+|--------|-------|
+| `APPLE_CERTIFICATE` | base64 of your Developer ID Application `.p12` |
+| `APPLE_CERTIFICATE_PASSWORD` | password for that `.p12` |
+| `APPLE_SIGNING_IDENTITY` | `Developer ID Application: Your Name (TEAMID1234)` |
+| `APPLE_ID` | your Apple ID email |
+| `APPLE_PASSWORD` | app-specific password (see §4) |
+| `APPLE_TEAM_ID` | your Team ID |
+
+With the secrets unset the pipeline still succeeds and produces an **unsigned** universal `.dmg` (users open it via the "Open Anyway" step documented in [Installation](installation.md#opening-an-unsigned-build)). Add the secrets later to flip every subsequent release to signed + notarized — no workflow change needed.
+
+**Adding the secrets (when you're ready to sign).** First base64-encode your exported Developer ID Application certificate so it survives as a single-line secret:
+
+```bash
+base64 -i DeveloperID.p12 | pbcopy   # copies the encoded cert to the clipboard
+```
+
+Then, in the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**. Add each row from the table above as its own secret (name = the `APPLE_*` key, value = the corresponding value; paste the clipboard for `APPLE_CERTIFICATE`). Once all six exist, the next tag you push produces a signed + notarized `.dmg` automatically.
 
 ## Troubleshooting the DMG build
 
@@ -130,7 +161,7 @@ You can automate signed, notarized builds in GitHub Actions with [`tauri-apps/ta
 `npm run tauri build` compiles the app and bundles the `.app`, then fails when building the `.dmg`:
 
 ```
-Bundling Quay_0.1.0_aarch64.dmg ...
+Bundling Quay_0.5.0_aarch64.dmg ...
      Running bundle_dmg.sh
 failed to bundle project: error running bundle_dmg.sh
 ```

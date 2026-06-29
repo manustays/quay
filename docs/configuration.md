@@ -52,6 +52,8 @@ Each registered service:
   "port": 5173,                // null if the service has no port
   "runMode": "background",     // "background" | "terminal"
   "brewFormula": null,         // e.g. "mysql" when kind = "brew"
+  "dockerImage": null,         // e.g. "postgres:16" when kind = "docker"
+  "containerName": null,       // container name when kind = "docker"
   "order": 0,                  // sort position in the menu
   "favorite": false,           // shown in the FAVORITES section when true
   "env": { "NODE_ENV": "development" }, // merged into the process env at spawn
@@ -73,6 +75,8 @@ Each registered service:
 | `port` | number \| null | TCP port. Enables the browser button and the port-based status check. |
 | `runMode` | `"background"` \| `"terminal"` | `background` = headless child + log file; `terminal` = opens a Terminal/iTerm window. Brew items are always treated as background. |
 | `brewFormula` | string \| null | Homebrew formula name when `kind = "brew"`. |
+| `dockerImage` | string \| null | Docker image to run when `kind = "docker"`, e.g. `postgres:16`. |
+| `containerName` | string \| null | Container name when `kind = "docker"` (required for docker items). Quay reuses an existing container with this name, or runs a new one. |
 | `order` | number | Menu sort order. |
 | `favorite` | boolean | Pin to the FAVORITES section. |
 | `env` | object (string→string) | Extra environment variables merged onto your shell env at spawn. **Plain text — dev variables only, not secrets.** |
@@ -131,6 +135,24 @@ Runtime state (PIDs, current status, log handles) is **not** persisted — it li
       "order": 1,
       "favorite": false,
       "env": {},
+      "healthPath": null,
+      "autoStart": false
+    },
+    {
+      "id": "33333333-3333-4333-8333-333333333333",
+      "name": "postgres",
+      "kind": "docker",
+      "dir": null,
+      "startCmd": null,
+      "stopCmd": null,
+      "port": 5432,
+      "runMode": "background",
+      "brewFormula": null,
+      "dockerImage": "postgres:16",
+      "containerName": "quay-postgres",
+      "order": 2,
+      "favorite": false,
+      "env": { "POSTGRES_PASSWORD": "dev" },
       "healthPath": null,
       "autoStart": false
     }

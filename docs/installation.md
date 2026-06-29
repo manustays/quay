@@ -1,6 +1,12 @@
 # Installation
 
-Quay is **macOS only**. There are no pre-built signed releases yet, so you install it by building from source (or by building your own `.dmg` and installing that).
+Quay is **macOS only**. The easiest path is to **download the latest release** (Option A below). You can also build from source (Options B and C). Releases are universal — one `.dmg` runs on Apple Silicon and Intel — but are **not yet code-signed/notarized**, so first launch needs one extra click (see [Opening an unsigned build](#opening-an-unsigned-build)).
+
+## Option A — Download a release (easiest)
+
+1. Go to the **[latest release](https://github.com/manustays/quay/releases/latest)** and download `Quay_<version>_universal.dmg`.
+2. Open the `.dmg` and drag **Quay** to `/Applications`.
+3. Launch it. Because the build is unsigned, macOS will block it the first time — follow [Opening an unsigned build](#opening-an-unsigned-build) to allow it. You only do this once.
 
 ## Prerequisites
 
@@ -10,6 +16,7 @@ Quay is **macOS only**. There are no pre-built signed releases yet, so you insta
 | **Node.js 18+** + npm | Builds the webview frontend | [nodejs.org](https://nodejs.org) or `brew install node` |
 | **Xcode Command Line Tools** | Compiles native macOS code | `xcode-select --install` |
 | **Homebrew** (optional) | Only needed for managing `brew services` items | [brew.sh](https://brew.sh) |
+| **Docker Desktop** (optional) | Only needed for managing Docker container items | [docker.com](https://www.docker.com/products/docker-desktop/) |
 
 After installing Rust, confirm `cargo` is on your `PATH`:
 
@@ -19,7 +26,7 @@ cargo --version    # should print a version, not "command not found"
 
 If it's missing, restart your shell or `source "$HOME/.cargo/env"`. See [Troubleshooting](troubleshooting.md#cargo-not-found) if it still isn't found.
 
-## Option A — Build and run from source (quickest to try)
+## Option B — Build and run from source (quickest to try)
 
 ```bash
 git clone https://github.com/manustays/quay.git
@@ -32,7 +39,7 @@ The first run compiles all Rust dependencies and may take a couple of minutes. W
 
 `npm run tauri dev` runs an unoptimized debug build with hot-reload for the frontend. Use it while trying the app or developing.
 
-## Option B — Build a release app and install it
+## Option C — Build a release app and install it
 
 ```bash
 git clone https://github.com/manustays/quay.git
@@ -44,7 +51,7 @@ npm run tauri build
 This produces:
 
 - The app bundle: `src-tauri/target/release/bundle/macos/Quay.app`
-- A disk image: `src-tauri/target/release/bundle/dmg/Quay_0.1.0_<arch>.dmg`
+- A disk image: `src-tauri/target/release/bundle/dmg/Quay_0.5.0_<arch>.dmg`
 
 Install it by either:
 
@@ -54,14 +61,25 @@ Install it by either:
   cp -R "src-tauri/target/release/bundle/macos/Quay.app" /Applications/
   ```
 
-### "App can't be opened because it is from an unidentified developer"
+### Opening an unsigned build
 
-A locally-built app is unsigned, so Gatekeeper will warn on first launch. To open it anyway:
+Downloaded releases and locally-built apps are **unsigned**, so Gatekeeper warns on first launch — *"Quay can't be opened because it is from an unidentified developer."* This is expected, not a sign of anything wrong. Open it once with either method (you only do this the first time):
 
-- **Right-click** the app in `/Applications` → **Open** → **Open** in the dialog, **or**
-- Run once: `xattr -dr com.apple.quarantine "/Applications/Quay.app"`
+**Recommended — "Open Anyway":**
 
-To produce a properly **signed and notarized** build that opens without warnings (recommended if you distribute it to others), see [Packaging & distribution](packaging.md).
+1. Double-click Quay; the warning appears. Dismiss it.
+2. Open **System Settings → Privacy & Security**, scroll to the **Security** section, and click **Open Anyway** next to the message about Quay.
+3. Confirm, and authenticate if prompted. Quay launches and is trusted from then on.
+
+> On **macOS Sequoia (15) and later**, the older right-click → **Open** shortcut no longer reliably bypasses Gatekeeper for unsigned apps — use **Open Anyway** above.
+
+**Alternative — strip the quarantine flag from a terminal:**
+
+```bash
+xattr -dr com.apple.quarantine "/Applications/Quay.app"
+```
+
+To produce a properly **signed and notarized** build that opens with no warning at all (recommended if you distribute it to others), see [Packaging & distribution](packaging.md). The release CI signs + notarizes automatically once the Apple credentials are configured as repository secrets.
 
 ## First launch
 
@@ -73,7 +91,9 @@ To produce a properly **signed and notarized** build that opens without warnings
 
 ## Updating
 
-Pull the latest source and rebuild:
+If you installed from a release, download the newer `.dmg` from the [latest release](https://github.com/manustays/quay/releases/latest) and drag it over the old app in `/Applications`. Your `config.json` lives outside the app, so it's preserved.
+
+If you built from source, pull the latest and rebuild:
 
 ```bash
 git pull

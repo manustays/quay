@@ -1,0 +1,72 @@
+name: Release
+
+# Build and publish a macOS universal .dmg to a GitHub Release.
+# Triggered by pushing a version tag, e.g.  git tag v0.5.0 && git push origin v0.5.0
+#
+# Signing & notarization are OPTIONAL: the build runs unsigned by default and
+# automatically signs + notarizes only when the Apple secrets below are set on
+# the repo (Settings → Secrets and variables → Actions). With empty secrets the
+# pipeline still succeeds and produces an unsigned bundle.
+#
+#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12
+#   APPLE_CERTIFICATE_PASSWORD  password for that .p12
+#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Your Name (TEAMID1234)"
+#   APPLE_ID                    your Apple ID email
+#   APPLE_PASSWORD              app-specific password for that Apple ID
+#   APPLE_TEAM_ID               your Team ID
+#
+# See docs/packaging.md for the manual equivalents.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write # needed to create the GitHub Release
+
+jobs:
+  release:
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust (with universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cache Rust build
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build, package, and draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple signing/notarization — optional; build runs unsigned when unset.
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          # One bundle that runs natively on Apple Silicon + Intel.
+          args: --target universal-apple-darwin
+          tagName: ${{ github.ref_name }}
+          releaseName: "Quay __VERSION__"
+          releaseBody: "See the assets below to download and install Quay. Install notes: https://github.com/manustays/quay/blob/main/docs/installation.md"
+          releaseDraft: true
+          prerelease: false

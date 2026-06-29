@@ -2,7 +2,7 @@
 
 > **Quay** _(pronounced "key")_ — **Where your ports come in.**
 >
-> A native macOS menubar app to start, stop, and monitor your local dev services — Node/Python servers, Homebrew services, and long-running terminal agents — from one place.
+> A native macOS menubar app to start, stop, and monitor your local dev services — Node/Python servers, Homebrew services, Docker containers, and long-running terminal agents — from one place, with live CPU/memory metrics.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-black.svg)](#requirements)
@@ -14,7 +14,7 @@
 
 If you build a lot of local services, you know the dance: remember which folder, `cd` into it, run the start command, switch to the browser, and repeat for every project. Keeping several running at once means juggling terminal tabs and trying to remember what's up and on which port.
 
-**Quay** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…) and long-running terminal agents.
+**Quay** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…), Docker containers, and long-running terminal agents.
 
 ## What it looks like
 
@@ -40,12 +40,14 @@ Status at a glance: ● running (green) · ◐ starting (yellow) · ○ stopped 
 
 ## Features
 
-- **One unified list** for three kinds of long-running things:
+- **One unified list** for four kinds of long-running things:
   - **Project servers** — Node/Python apps on `localhost:<port>` (`npm run dev`, `python main.py`, …)
   - **Homebrew services** — `brew services` formulae like `mysql`, `mongodb-community`, `redis`
+  - **Docker containers** — pick an image (autocompleted from your local images), name the container, and Quay starts the daemon if needed, then runs/reuses it
   - **Terminal agents** — interactive tools you run in a terminal (e.g. Claude Code, custom agents)
 - **Start / stop** each item from the menubar. Background services run headless (no foreground terminal); their output is logged to a file.
 - **Live status** — process liveness **plus** a port/HTTP health check, polled in the background and pushed to the UI (no manual refresh).
+- **Resource metrics** — live CPU % and memory per item (including per-container `docker stats`), sampled while the popover is open.
 - **Open in browser** — one click opens `http://localhost:<port>`.
 - **Open a terminal** already `cd`'d into the service's folder, when you actually need to watch logs.
 - **Auto-detect on add** — pick a folder and the app reads `package.json` / `requirements.txt` / `.env` to pre-fill the start command and port.
@@ -56,13 +58,26 @@ Status at a glance: ● running (green) · ◐ starting (yellow) · ○ stopped 
 
 ## Requirements
 
-- **macOS** (Apple Silicon or Intel). This app is macOS-only — it uses `osascript`, `open`, and `brew`.
+- **macOS** (Apple Silicon or Intel). This app is macOS-only — it uses `osascript`, `open`, and `brew`. The download is a **universal** build, so one `.dmg` runs natively on both architectures.
 - For Homebrew items: [Homebrew](https://brew.sh) installed.
+- For Docker items: [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed (Quay can start the daemon for you, but it must be installed).
 - To build from source: see [Development](docs/development.md).
 
-## Install
+## Download
 
-There are no pre-built signed releases yet, so the supported path today is **build from source** (or build your own `.dmg`).
+**[⬇ Download for macOS — latest release](https://github.com/manustays/quay/releases/latest)**
+
+Grab the `.dmg` from the latest release, open it, and drag **Quay** to `/Applications`.
+
+> **First launch.** Current releases are **not yet code-signed/notarized**, so macOS Gatekeeper will say *"Quay can't be opened because it is from an unidentified developer."* This is expected. To open it:
+> 1. Try to open Quay once (the warning appears).
+> 2. Go to **System Settings → Privacy & Security**, scroll down, and click **Open Anyway** next to the Quay message, then confirm.
+>
+> (On macOS Sequoia and later, the older right-click → Open trick no longer reliably bypasses this for unsigned apps — use **Open Anyway**.) Full steps, plus the `xattr` alternative, are in the **[Installation guide](docs/installation.md)**.
+
+### Build from source
+
+Prefer to build it yourself (or want your own signed `.dmg`)?
 
 ```bash
 git clone https://github.com/manustays/quay.git
@@ -71,7 +86,7 @@ npm install
 npm run tauri build      # produces a .app and .dmg under src-tauri/target/release/bundle/
 ```
 
-Open the generated `.dmg` and drag the app to `/Applications`, or run it in dev mode while you try it out:
+Or run it in dev mode while you try it out:
 
 ```bash
 npm run tauri dev
@@ -85,7 +100,7 @@ Full details, including the Rust/Node prerequisites and how to package, sign, an
 ## Usage
 
 1. Click the menubar icon → **+ Add**.
-2. **Pick a folder** (for a project or agent) — the app pre-fills name, start command, and port. Or choose **kind = brew** and pick a formula.
+2. **Pick a folder** (for a project or agent) — the app pre-fills name, start command, and port. Or choose **kind = brew** and pick a formula, or **kind = docker** and pick an image (Quay autocompletes from your local images and fills in a container name).
 3. Tweak fields if needed (run mode, env vars, health path, favorite, auto-start) → **Save**.
 4. Hit **▶** to start. Watch the dot go yellow → green. Use **↗** to open the browser, **>_** to open a terminal, **■** to stop.
 
@@ -97,8 +112,10 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 |-----|--------------|
 | [Installation](docs/installation.md) | Prerequisites, build from source, install the `.app` |
 | [Usage](docs/usage.md) | Adding items, run modes, status, browser/terminal actions, favorites |
+| [Docker services](docs/docker-services.md) | Running and monitoring Docker containers as items |
+| [Metrics](docs/metrics.md) | How live CPU/memory sampling works (processes + `docker stats`) |
 | [Configuration](docs/configuration.md) | `config.json` location + full field reference |
-| [Packaging & distribution](docs/packaging.md) | Build a `.dmg`, code-sign, and notarize for macOS |
+| [Packaging & distribution](docs/packaging.md) | Build a `.dmg`, code-sign, notarize, and the release CI |
 | [Development](docs/development.md) | Dev setup, project layout, running tests |
 | [Architecture](docs/architecture.md) | How the Rust core and webview fit together |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
@@ -113,7 +130,7 @@ A Rust core owns all process supervision and state; a small vanilla-TypeScript w
 - **macOS only.**
 - **Services don't survive an app restart** by design — quitting the app stops everything it started; on relaunch all items show `stopped`.
 - **Terminal-mode items are best-effort** — the app opens a Terminal/iTerm window but doesn't own that process; "stop" for those is best-effort, and a terminal item with a configured port can sit at `starting` if its window is closed externally.
-- No pre-built signed release yet — build from source or roll your own `.dmg`.
+- **Releases are not yet code-signed/notarized** — the download opens after an **Open Anyway** step (see [Download](#download)); a signed build removes that.
 
 See the design spec's non-goals for the full list.
 
@@ -122,7 +139,7 @@ See the design spec's non-goals for the full list.
 - Drag-to-reorder in the UI (the backend `reorder` command already exists)
 - Aggregate tray-icon color reflecting overall state
 - Richer error surfacing (exit code + log tail in tooltips)
-- Pre-built, notarized releases
+- Signed & notarized releases (CI already publishes universal `.dmg`s — see [`.github/workflows/release.yml`](.github/workflows/release.yml))
 
 ## Contributing
 

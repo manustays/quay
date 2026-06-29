@@ -32,6 +32,7 @@ Each module has a single responsibility:
 | `store` | Load/save `config.json` with an atomic temp-write + rename, and corrupt-file recovery (`config.bad.json` + defaults). Also persists the volatile `id → pid` map in `pids.json` for reattachment after an app restart. |
 | `detect` | Inspect a chosen folder (`package.json`, `requirements.txt`/`pyproject.toml`, `.env`) and suggest a name, start command, port, and kind. |
 | `brew` | Wrap `brew services start/stop/list` and parse the list output into per-formula statuses. |
+| `docker` | Wrap the Docker CLI for container items: daemon lifecycle (`daemon_running`/`start_daemon`/`wait_for_daemon`), image listing for autocomplete (`list_images`), run/reuse a named container (`docker_start`) and stop it (`docker_stop`), container status via `docker ps` (`docker_status`/`parse_docker_ps`), and resource stats via `docker stats` (`stats_raw`/`parse_docker_stats`). See [Docker services](docker-services.md). |
 | `supervisor` | Spawn a background item via `zsh -lc "<cmd>"` in its **own process group** (`setsid`), redirect stdout/stderr to `logs/<id>.log`, and stop it by signalling the group (SIGTERM, escalating to SIGKILL). Also **adopts** orphaned services across app restarts: `adopt` (handle-less, PID-only), `pids_listening`/`parse_lsof_pids` (find listeners via `lsof`), and `stop_port` (free a port by killing its listeners). See [process reattachment](process-reattach.md). |
 | `health` | The pure `decide_status` function (PID liveness × port/HTTP reachability → status), the TCP/HTTP probes, and the background poll loop that emits `status_changed`. |
 | `metrics` | Per-process CPU%/memory sampling via `sysinfo`. A visibility-gated loop (`AppState.visible`) samples only while the popover is open, aggregates each item's whole process tree (pure `aggregate_tree`), and emits `metrics_changed`. See [metrics](metrics.md). |
@@ -59,6 +60,7 @@ Each module has a single responsibility:
 1. UI calls `invoke('start_item', { id })`.
 2. `commands::start_item` dispatches by kind:
    - **brew** → `brew services start <formula>`, status set to `running`.
+   - **docker** → ensure the daemon is up (`docker::start_daemon`/`wait_for_daemon` if needed), then `docker::docker_start` runs or reuses the named container; status `starting`.
    - **background** → `supervisor::spawn_background` spawns the child (own process group, logs to file), inserts it into the running map, status `starting`.
    - **terminal** → `terminal::run_in_terminal` opens a Terminal/iTerm window; status `running`.
 3. The poll loop picks it up on the next cycle and emits `status_changed` as the real state settles (e.g. `starting` → `running` once the port opens).
@@ -70,6 +72,7 @@ A single background thread runs every `pollIntervalSec`:
 - For each non-stopped item, it computes status:
   - **background:** is the child PID alive? then a port/HTTP check → `decide_status`. A dead PID records an error and yields `error`.
   - **brew:** parse `brew services list`.
+  - **docker:** `docker ps` for the named container (`docker::docker_status`), plus a port/HTTP check if the item has a port.
   - **terminal:** a port check if the item has a port.
 - It calls `set_status`, which emits `status_changed` **only when the status actually changed** (so the UI isn't spammed).
 
@@ -79,7 +82,7 @@ The poll loop deliberately releases the `running` lock before doing the (blockin
 
 A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it idle-ticks every 500 ms and does no sampling work.
 
-Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta, then sums each item's whole process tree with the pure `aggregate_tree` helper. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
+Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta, then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
 
 ### Shutdown
 
