@@ -51,17 +51,40 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build, package, and draft release
+      # Decide whether to sign. The Apple env vars must be ABSENT (not just
+      # empty) for an unsigned build — Tauri's bundler treats a present-but-empty
+      # APPLE_CERTIFICATE as "sign me" and then fails importing an empty cert.
+      # So we gate on this flag and use two separate build steps.
+      - name: Determine signing
+        id: signing
+        env:
+          HAS_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
+        run: echo "enabled=$HAS_CERT" >> "$GITHUB_OUTPUT"
+
+      - name: Build, package, and draft release (signed)
+        if: steps.signing.outputs.enabled == 'true'
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Apple signing/notarization — optional; build runs unsigned when unset.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        with:
+          args: --target universal-apple-darwin
+          tagName: ${{ github.ref_name }}
+          releaseName: "Quay __VERSION__"
+          releaseBody: "See the assets below to download and install Quay. Install notes: https://github.com/manustays/quay/blob/main/docs/installation.md"
+          releaseDraft: true
+          prerelease: false
+
+      - name: Build, package, and draft release (unsigned)
+        if: steps.signing.outputs.enabled != 'true'
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           # One bundle that runs natively on Apple Silicon + Intel.
           args: --target universal-apple-darwin

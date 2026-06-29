@@ -1,7 +1,7 @@
 {
 	"name": "quay",
 	"private": true,
-	"version": "0.5.1",
+	"version": "0.5.2",
 	"description": "Native macOS menubar app to start, stop, and monitor local dev servers, Homebrew services, Docker containers, and CLI tools — with live CPU/memory metrics.",
 	"type": "module",
 	"scripts": {
