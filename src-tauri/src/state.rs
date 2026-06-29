@@ -19,4 +19,8 @@ pub struct AppState {
 	/// does no sampling work while the popover is hidden. Set true on show,
 	/// false only when the window is genuinely hidden (see `lib.rs`).
 	pub visible: AtomicBool,
+	/// `true` while an updater check/download/install is running. Guards the
+	/// launch check and the "Check for Updates…" tray item against overlapping
+	/// runs (duplicate dialogs, racing downloads). See `lib.rs::check_for_updates`.
+	pub update_in_flight: AtomicBool,
 }

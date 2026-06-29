@@ -36,9 +36,18 @@
 			"csp": null
 		}
 	},
+	"plugins": {
+		"updater": {
+			"endpoints": [
+				"https://github.com/manustays/quay/releases/latest/download/latest.json"
+			],
+			"pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDMwNEEwN0VERTUyQUJCNTgKUldSWXV5cmw3UWRLTURXSEJJRjc4a3B3RHdESUVhNWhoUHY4ZG9PbE8rWEFmSXV6YUJqSDAwTk0K"
+		}
+	},
 	"bundle": {
 		"active": true,
 		"targets": "all",
+		"createUpdaterArtifacts": true,
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",

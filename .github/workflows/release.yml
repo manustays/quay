@@ -60,6 +60,11 @@ jobs:
         run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Tauri updater signing — REQUIRED for auto-update. The bundler emits the
+          # .app.tar.gz.sig only when the private key is present; scripts/make-latest-json.mjs
+          # aborts the release if the signature is missing. See docs/auto-update.md.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           # Apple signing/notarization — optional. scripts/release-build.sh
           # builds unsigned unless BOTH the cert and signing identity are set.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}

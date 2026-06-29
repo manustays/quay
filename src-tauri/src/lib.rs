@@ -17,6 +17,102 @@ use tauri::{
 	WindowEvent,
 };
 
+/// Check GitHub for a newer release; if the user agrees, download, install, and
+/// restart. `silent` suppresses the "up to date" and check-failure dialogs so the
+/// on-launch check stays quiet when nothing is new or the network is down — the
+/// manual "Check for Updates…" tray item passes `silent = false`. An install
+/// failure is always surfaced (the user explicitly clicked Install). Guarded by
+/// `update_in_flight` so a launch check and a manual check can't overlap.
+async fn check_for_updates(app: tauri::AppHandle, silent: bool) {
+	use std::sync::atomic::Ordering;
+
+	// Claim the in-flight slot; bail if a check is already running.
+	{
+		let st = app.state::<state::AppState>();
+		if st
+			.update_in_flight
+			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+			.is_err()
+		{
+			return;
+		}
+	}
+
+	run_update_check(&app, silent).await;
+
+	app.state::<state::AppState>()
+		.update_in_flight
+		.store(false, Ordering::Release);
+}
+
+/// Inner update flow, factored out so `check_for_updates` can always release the
+/// `update_in_flight` guard regardless of which branch returns.
+async fn run_update_check(app: &tauri::AppHandle, silent: bool) {
+	use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
+	use tauri_plugin_updater::UpdaterExt;
+
+	let updater = match app.updater() {
+		Ok(u) => u,
+		Err(e) => {
+			if !silent {
+				app.dialog()
+					.message(format!("Couldn't start the updater: {e}"))
+					.title("Update Error")
+					.kind(MessageDialogKind::Error)
+					.blocking_show();
+			}
+			return;
+		}
+	};
+
+	match updater.check().await {
+		Ok(Some(update)) => {
+			let accepted = app
+				.dialog()
+				.message(format!(
+					"Quay {} is available (you have {}).\n\nDownload and install it now?",
+					update.version, update.current_version
+				))
+				.title("Update Available")
+				.buttons(MessageDialogButtons::OkCancelCustom(
+					"Install & Restart".into(),
+					"Later".into(),
+				))
+				.blocking_show();
+			if !accepted {
+				return;
+			}
+			match update.download_and_install(|_, _| {}, || {}).await {
+				Ok(_) => app.restart(),
+				Err(e) => {
+					app.dialog()
+						.message(format!("The update failed to install: {e}"))
+						.title("Update Error")
+						.kind(MessageDialogKind::Error)
+						.blocking_show();
+				}
+			}
+		}
+		Ok(None) => {
+			if !silent {
+				app.dialog()
+					.message("You're running the latest version of Quay.")
+					.title("No Updates")
+					.blocking_show();
+			}
+		}
+		Err(e) => {
+			if !silent {
+				app.dialog()
+					.message(format!("Couldn't check for updates: {e}"))
+					.title("Update Error")
+					.kind(MessageDialogKind::Error)
+					.blocking_show();
+			}
+		}
+	}
+}
+
 /// Toggle the popover window: show+focus if hidden, hide if visible.
 fn toggle_popover(app: &tauri::AppHandle) {
 	use std::sync::atomic::Ordering;
@@ -45,6 +141,7 @@ pub fn run() {
 		.plugin(tauri_plugin_dialog::init())
 		.plugin(tauri_plugin_positioner::init())
 		.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))
+		.plugin(tauri_plugin_updater::Builder::new().build())
 		.invoke_handler(tauri::generate_handler![
 			commands::get_items,
 			commands::add_item,
@@ -167,9 +264,11 @@ pub fn run() {
 				}
 			}
 
-			// Build a tray context menu with a single "Quit" item.
+			// Build the tray context menu: a manual update check above Quit.
+			let check_updates =
+				MenuItemBuilder::with_id("check_updates", "Check for Updates…").build(app)?;
 			let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-			let tray_menu = MenuBuilder::new(app).items(&[&quit]).build()?;
+			let tray_menu = MenuBuilder::new(app).items(&[&check_updates, &quit]).build()?;
 
 			TrayIconBuilder::new()
 				// Monochrome buoy glyph rendered as a macOS template image so it
@@ -190,16 +289,32 @@ pub fn run() {
 						toggle_popover(tray.app_handle());
 					}
 				})
-				.on_menu_event(|app, event| {
-					if event.id().as_ref() == "quit" {
+				.on_menu_event(|app, event| match event.id().as_ref() {
+					"check_updates" => {
+						// Manual check: surface "up to date" and errors (silent = false).
+						tauri::async_runtime::spawn(check_for_updates(app.clone(), false));
+					}
+					"quit" => {
 						// Stop background/brew/docker children but leave terminal windows
 						// open; their PIDs are persisted so the next launch reattaches.
 						let st = app.state::<state::AppState>();
 						commands::shutdown_stop_non_terminal(&st);
 						app.exit(0);
 					}
+					_ => {}
 				})
 				.build(app)?;
+
+			// Silent update check shortly after launch — delayed a few seconds so the
+			// tray + popover are settled before any "update available" dialog appears.
+			{
+				let handle = app.handle().clone();
+				std::thread::spawn(move || {
+					std::thread::sleep(std::time::Duration::from_secs(3));
+					tauri::async_runtime::spawn(check_for_updates(handle, true));
+				});
+			}
+
 			Ok(())
 		})
 		.on_window_event(|window, event| {

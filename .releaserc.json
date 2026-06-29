@@ -11,7 +11,7 @@
 		[
 			"@semantic-release/exec",
 			{
-				"prepareCmd": "node scripts/set-version.mjs ${nextRelease.version} && bash scripts/release-build.sh"
+				"prepareCmd": "node scripts/set-version.mjs ${nextRelease.version} && bash scripts/release-build.sh && node scripts/make-latest-json.mjs"
 			}
 		],
 		[
@@ -19,7 +19,8 @@
 			{
 				"assets": [
 					{ "path": "src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg", "label": "macOS universal (.dmg)" },
-					{ "path": "src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz", "label": "macOS updater bundle (.app.tar.gz)" }
+					{ "path": "src-tauri/target/universal-apple-darwin/release/bundle/macos/*.app.tar.gz", "label": "macOS updater bundle (.app.tar.gz)" },
+					{ "path": "latest.json", "label": "Updater manifest (latest.json)" }
 				]
 			}
 		],

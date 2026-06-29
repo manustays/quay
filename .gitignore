@@ -12,6 +12,16 @@ dist
 dist-ssr
 *.local
 
+# Updater manifest — generated at release time by scripts/make-latest-json.mjs and
+# published as a GitHub Release asset; never committed.
+latest.json
+
+# Internal planning/strategy docs — kept locally, never committed (not for the
+# public repo). Removed from tracking before open-sourcing.
+docs/local-roadmap/
+docs/superpowers/
+
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

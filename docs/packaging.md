@@ -118,9 +118,11 @@ On a release-worthy commit, the [`Release` workflow](../.github/workflows/releas
 
 1. Computes the next version from the commits since the last tag.
 2. Writes it into `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` via [`scripts/set-version.mjs`](../scripts/set-version.mjs) (one source of truth — no hand-syncing). `Cargo.lock` is refreshed by the build.
-3. Builds the universal `.dmg` ([`scripts/release-build.sh`](../scripts/release-build.sh)).
-4. Updates `CHANGELOG.md`, creates the `vX.Y.Z` tag, and **publishes** a GitHub Release with the `.dmg` attached.
+3. Builds the universal `.dmg` + the signed `.app.tar.gz` updater bundle ([`scripts/release-build.sh`](../scripts/release-build.sh)), then generates the updater manifest `latest.json` ([`scripts/make-latest-json.mjs`](../scripts/make-latest-json.mjs)).
+4. Updates `CHANGELOG.md`, creates the `vX.Y.Z` tag, and **publishes** a GitHub Release with the `.dmg`, `.app.tar.gz`, and `latest.json` attached.
 5. Commits the bumped files + changelog back to `main` as `chore(release): … [skip ci]` (which does not re-trigger the workflow).
+
+> **Auto-update.** The `.app.tar.gz` + `latest.json` assets power in-app auto-update via `tauri-plugin-updater`. That signing is **separate** from the Apple signing below and is **required** once enabled — the release fails if the `TAURI_SIGNING_PRIVATE_KEY` secret is missing. See [Auto-Update](auto-update.md).
 
 The published release is what the README / marketing **Download** link resolves to (`releases/latest`). There is no draft step — a release-worthy commit ships to users automatically. (To gate that, do feature work on branches and merge deliberately.)
 
