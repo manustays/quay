@@ -103,37 +103,32 @@ spctl -a -vvv -t install "src-tauri/target/release/bundle/macos/Quay.app"
 
 A notarized app reports `source=Notarized Developer ID` and `accepted`.
 
-## 5. Versioning a release
+## 5. Releasing (fully automated)
 
-Bump the version in **both**:
+Releases are driven by [semantic-release](https://semantic-release.gitbook.io/) — **you never bump a version or create a tag by hand.** Land a [Conventional Commit](https://www.conventionalcommits.org/) on `main` and CI does the rest.
 
-- `src-tauri/tauri.conf.json` → `"version"`
-- `package.json` → `"version"`
+| Commit type | Example | Result |
+|-------------|---------|--------|
+| `fix:` | `fix: detect closed terminal window` | patch release (`0.5.2` → `0.5.3`) |
+| `feat:` | `feat: add Docker autostart` | minor release (`0.5.2` → `0.6.0`) |
+| `feat!:` / `BREAKING CHANGE:` footer | | major release (`0.5.2` → `1.0.0`) |
+| `docs:` / `chore:` / `test:` / `refactor:` | | **no release** (CI runs, decides nothing to ship, exits) |
 
-(Keep them in sync — Tauri uses `tauri.conf.json`; npm scripts read `package.json`.) Then build, and tag the release in git:
+On a release-worthy commit, the [`Release` workflow](../.github/workflows/release.yml) (on `macos-latest`):
 
-```bash
-git tag v0.5.0
-git push origin v0.5.0
-```
+1. Computes the next version from the commits since the last tag.
+2. Writes it into `package.json`, `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml` via [`scripts/set-version.mjs`](../scripts/set-version.mjs) (one source of truth — no hand-syncing). `Cargo.lock` is refreshed by the build.
+3. Builds the universal `.dmg` ([`scripts/release-build.sh`](../scripts/release-build.sh)).
+4. Updates `CHANGELOG.md`, creates the `vX.Y.Z` tag, and **publishes** a GitHub Release with the `.dmg` attached.
+5. Commits the bumped files + changelog back to `main` as `chore(release): … [skip ci]` (which does not re-trigger the workflow).
 
-Pushing the tag triggers the CI pipeline (§6), which builds the universal `.dmg` and drafts a GitHub Release with it attached — just review and publish. (To build and attach a `.dmg` by hand instead, run §1–§4 locally and upload it to a new Release.)
+The published release is what the README / marketing **Download** link resolves to (`releases/latest`). There is no draft step — a release-worthy commit ships to users automatically. (To gate that, do feature work on branches and merge deliberately.)
 
-## 6. CI release pipeline
+The semantic-release plugin chain lives in [`.releaserc.json`](../.releaserc.json).
 
-The repo ships a GitHub Actions workflow at [`.github/workflows/release.yml`](../.github/workflows/release.yml) that builds and publishes releases automatically.
+## 6. Code signing in CI
 
-**Trigger.** Push a version tag:
-
-```bash
-# bump version in both files first (see §5), then:
-git tag v0.5.0
-git push origin v0.5.0
-```
-
-**What it does.** On a `macos-latest` runner it installs the `aarch64`/`x86_64` Rust targets, runs [`tauri-apps/tauri-action`](https://github.com/tauri-apps/tauri-action) with `--target universal-apple-darwin` (one `.dmg` for both architectures), and creates a **draft** GitHub Release with the `.dmg` attached. Review the draft, then publish it — that's what the README's "Download for macOS" link resolves to (`releases/latest`).
-
-**Signing is conditional.** The workflow runs **unsigned by default** and automatically signs + notarizes only when these are set as encrypted repository secrets (Settings → Secrets and variables → Actions):
+The build is **unsigned by default** and automatically signs + notarizes only when a **complete** set of Apple credentials is present as encrypted repository secrets (a partial set is treated as unsigned — see [`scripts/release-build.sh`](../scripts/release-build.sh)). Secrets (Settings → Secrets and variables → Actions):
 
 | Secret | Value |
 |--------|-------|
@@ -152,7 +147,7 @@ With the secrets unset the pipeline still succeeds and produces an **unsigned** 
 base64 -i DeveloperID.p12 | pbcopy   # copies the encoded cert to the clipboard
 ```
 
-Then, in the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**. Add each row from the table above as its own secret (name = the `APPLE_*` key, value = the corresponding value; paste the clipboard for `APPLE_CERTIFICATE`). Once all six exist, the next tag you push produces a signed + notarized `.dmg` automatically.
+Then, in the GitHub repo: **Settings → Secrets and variables → Actions → New repository secret**. Add each row from the table above as its own secret (name = the `APPLE_*` key, value = the corresponding value; paste the clipboard for `APPLE_CERTIFICATE`). Once all six exist, the next release builds a signed + notarized `.dmg` automatically — no workflow change needed.
 
 ## Troubleshooting the DMG build
 

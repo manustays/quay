@@ -1,29 +1,31 @@
 name: Release
 
-# Build and publish a macOS universal .dmg to a GitHub Release.
-# Triggered by pushing a version tag, e.g.  git tag v0.5.0 && git push origin v0.5.0
+# Fully automated releases via semantic-release.
 #
-# Signing & notarization are OPTIONAL: the build runs unsigned by default and
-# automatically signs + notarizes only when the Apple secrets below are set on
-# the repo (Settings → Secrets and variables → Actions). With empty secrets the
-# pipeline still succeeds and produces an unsigned bundle.
+# Push a Conventional Commit to main (feat: / fix: / perf: …) and this workflow
+# computes the next version from commit history, writes it into the project
+# files, builds the universal macOS .dmg, creates the git tag, and publishes a
+# GitHub Release with the asset attached — no manual tag, bump, or publish.
+# Commits that warrant no release (docs:/chore:/test:/refactor with no user
+# impact) run the analysis and exit without building.
 #
-#   APPLE_CERTIFICATE            base64 of the Developer ID Application .p12
-#   APPLE_CERTIFICATE_PASSWORD  password for that .p12
-#   APPLE_SIGNING_IDENTITY      e.g. "Developer ID Application: Your Name (TEAMID1234)"
-#   APPLE_ID                    your Apple ID email
-#   APPLE_PASSWORD              app-specific password for that Apple ID
-#   APPLE_TEAM_ID               your Team ID
-#
-# See docs/packaging.md for the manual equivalents.
+# Signing/notarization is automatic when a COMPLETE set of Apple secrets is
+# configured (see docs/packaging.md); otherwise the build is unsigned. Nothing
+# to change in this file to switch it on.
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+
+# Don't pile up release runs; let an in-flight one finish.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 permissions:
-  contents: write # needed to create the GitHub Release
+  contents: write # create releases, push the version-bump commit + tag
+  issues: write # semantic-release success/fail comments
+  pull-requests: write
 
 jobs:
   release:
@@ -31,6 +33,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # semantic-release needs full history + tags
+          persist-credentials: true
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -51,45 +56,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      # Decide whether to sign. The Apple env vars must be ABSENT (not just
-      # empty) for an unsigned build — Tauri's bundler treats a present-but-empty
-      # APPLE_CERTIFICATE as "sign me" and then fails importing an empty cert.
-      # So we gate on this flag and use two separate build steps.
-      - name: Determine signing
-        id: signing
-        env:
-          HAS_CERT: ${{ secrets.APPLE_CERTIFICATE != '' }}
-        run: echo "enabled=$HAS_CERT" >> "$GITHUB_OUTPUT"
-
-      - name: Build, package, and draft release (signed)
-        if: steps.signing.outputs.enabled == 'true'
-        uses: tauri-apps/tauri-action@v0
+      - name: Release
+        run: npx semantic-release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Apple signing/notarization — optional. scripts/release-build.sh
+          # builds unsigned unless BOTH the cert and signing identity are set.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          args: --target universal-apple-darwin
-          tagName: ${{ github.ref_name }}
-          releaseName: "Quay __VERSION__"
-          releaseBody: "See the assets below to download and install Quay. Install notes: https://github.com/manustays/quay/blob/main/docs/installation.md"
-          releaseDraft: true
-          prerelease: false
-
-      - name: Build, package, and draft release (unsigned)
-        if: steps.signing.outputs.enabled != 'true'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          # One bundle that runs natively on Apple Silicon + Intel.
-          args: --target universal-apple-darwin
-          tagName: ${{ github.ref_name }}
-          releaseName: "Quay __VERSION__"
-          releaseBody: "See the assets below to download and install Quay. Install notes: https://github.com/manustays/quay/blob/main/docs/installation.md"
-          releaseDraft: true
-          prerelease: false
