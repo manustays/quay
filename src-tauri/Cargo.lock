@@ -2342,7 +2342,7 @@ dependencies = [
 
 [[package]]
 name = "quay"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "dirs 5.0.1",
  "libc",
