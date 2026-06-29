@@ -3,7 +3,6 @@
 	"productName": "Quay",
 	"version": "0.5.0",
 	"identifier": "am.abhi.quay",
-	"description": "Native macOS menubar app to start, stop, and monitor local dev servers, Homebrew services, Docker containers, and CLI tools — with live CPU/memory metrics.",
 	"build": {
 		"beforeDevCommand": "npm run dev",
 		"devUrl": "http://localhost:1420",
