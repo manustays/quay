@@ -12,7 +12,7 @@ pub mod terminal;
 
 use tauri::{
 	Manager,
-	menu::{MenuBuilder, MenuItemBuilder},
+	menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 	WindowEvent,
 };
@@ -290,11 +290,23 @@ pub fn run() {
 				}
 			}
 
+			// Get app name and version dynamically
+            let app_name = &app.package_info().name;
+            let app_version = &app.package_info().version;
+            let label_text = format!("{} v{}", app_name, app_version);
+
+			// Build the static title item for the tray context menu and disable it
+            let title_item = MenuItemBuilder::new(&label_text)
+                .enabled(false) // 👈 This makes it static and unclickable!
+                .build(app)?;
+
 			// Build the tray context menu: a manual update check above Quit.
 			let check_updates =
 				MenuItemBuilder::with_id("check_updates", "Check for Updates…").build(app)?;
 			let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
-			let tray_menu = MenuBuilder::new(app).items(&[&check_updates, &quit]).build()?;
+			let divider = PredefinedMenuItem::separator(app)?;
+
+			let tray_menu = MenuBuilder::new(app).items(&[&title_item, &check_updates, &divider, &quit]).build()?;
 
 			TrayIconBuilder::with_id("main")
 				// Monochrome buoy glyph rendered as a macOS template image so it
