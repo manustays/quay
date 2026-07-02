@@ -28,6 +28,10 @@ pub struct ItemMetrics {
 	/// Summed resident memory across the process tree, in bytes.
 	#[serde(rename = "memoryBytes")]
 	pub memory_bytes: u64,
+	/// Seconds since the item's root process started (None for Docker items —
+	/// containers have no host PID to read a start time from).
+	#[serde(rename = "uptimeSec")]
+	pub uptime_sec: Option<u64>,
 }
 
 /// Sum cpu% + memory over the union of subtrees rooted at `roots`, deduping
@@ -132,9 +136,11 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 
 		let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
 		let mut samples: HashMap<u32, (f32, u64)> = HashMap::new();
+		let mut uptimes: HashMap<u32, u64> = HashMap::new();
 		for (pid, proc_) in sys.processes() {
 			let pid_u = pid.as_u32();
 			samples.insert(pid_u, (proc_.cpu_usage(), proc_.memory()));
+			uptimes.insert(pid_u, proc_.run_time());
 			if let Some(parent) = proc_.parent() {
 				children.entry(parent.as_u32()).or_default().push(pid_u);
 			}
@@ -144,7 +150,9 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 			.into_iter()
 			.map(|(id, roots)| {
 				let (cpu_percent, memory_bytes) = aggregate_tree(&roots, &children, &samples);
-				ItemMetrics { id, cpu_percent, memory_bytes }
+				// Roots are sorted ascending, so the first is the oldest/launcher PID.
+				let uptime_sec = roots.first().and_then(|p| uptimes.get(p).copied());
+				ItemMetrics { id, cpu_percent, memory_bytes, uptime_sec }
 			})
 			.collect()
 	};
@@ -178,6 +186,7 @@ fn collect_docker(items: &[ManagedItem], statuses: &HashMap<String, Status>) -> 
 				id: id.to_string(),
 				cpu_percent,
 				memory_bytes,
+				uptime_sec: None,
 			})
 		})
 		.collect()

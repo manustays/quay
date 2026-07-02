@@ -74,6 +74,8 @@ export interface ItemMetrics {
 	id: string;
 	cpuPercent: number;
 	memoryBytes: number;
+	/** Seconds since the root process started (null for Docker items). */
+	uptimeSec: number | null;
 }
 
 /**
@@ -120,6 +122,19 @@ export function formatBytes(bytes: number): string {
 	const exp = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
 	const value = bytes / 1024 ** exp;
 	return `${value < 10 && exp > 0 ? value.toFixed(1) : Math.round(value)} ${units[exp]}`;
+}
+
+/**
+ * Format an uptime in seconds as a compact human string
+ * (42 → "42s", 3720 → "1h 2m", 90000 → "1d 1h").
+ */
+export function formatUptime(sec: number): string {
+	if (sec < 60) return `${sec}s`;
+	const minutes = Math.floor(sec / 60);
+	if (minutes < 60) return `${minutes}m`;
+	const hours = Math.floor(minutes / 60);
+	if (hours < 24) return `${hours}h ${minutes % 60}m`;
+	return `${Math.floor(hours / 24)}d ${hours % 24}h`;
 }
 
 /**

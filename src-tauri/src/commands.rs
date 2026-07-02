@@ -436,6 +436,17 @@ pub fn open_terminal(app: AppHandle, id: String) -> Result<(), AppError> {
 	terminal::open_folder(&app_name, &dir)
 }
 
+/// Reveal the item's folder in Finder.
+#[tauri::command]
+pub fn reveal_in_finder(app: AppHandle, id: String) -> Result<(), AppError> {
+	let state = app.state::<AppState>();
+	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
+	let dir = item.dir.clone().ok_or_else(|| AppError::Message("no dir".into()))?;
+	std::process::Command::new("open").args(["-R", &dir]).spawn()
+		.map_err(|e| AppError::Message(e.to_string()))?;
+	Ok(())
+}
+
 /// Return the last `lines` lines from the item's log file (empty string if none).
 #[tauri::command]
 pub fn tail_log(app: AppHandle, id: String, lines: usize) -> Result<String, AppError> {

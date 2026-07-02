@@ -20,6 +20,7 @@ export const stopItem = (id: string) => invoke<void>('stop_item', { id });
 export const stopAll = () => invoke<void>('stop_all');
 export const openBrowser = (id: string) => invoke<void>('open_browser', { id });
 export const openTerminal = (id: string) => invoke<void>('open_terminal', { id });
+export const revealInFinder = (id: string) => invoke<void>('reveal_in_finder', { id });
 export const tailLog = (id: string, lines: number) => invoke<string>('tail_log', { id, lines });
 export const detectFolder = (path: string) => invoke<DetectResult>('detect_folder_cmd', { path });
 export const getStatuses = () => invoke<ItemStatus[]>('get_statuses');

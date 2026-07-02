@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
 	ArrowUpRight,
+	FolderOpen,
 	GripVertical,
 	Pencil,
 	Play,
@@ -20,11 +21,12 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { StackIcon } from './StackIcon';
-import { formatBytes, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { formatBytes, formatUptime, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import {
 	deleteItem,
 	openBrowser,
 	openTerminal,
+	revealInFinder,
 	startItem,
 	stopItem,
 	tailLog,
@@ -90,6 +92,7 @@ export function ServiceRow({
 }: ServiceRowProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const [log, setLog] = useState<string>('');
+	const [copied, setCopied] = useState(false);
 	// Gate `draggable` on the handle so only the grip starts a drag, not the whole row.
 	const [grabbing, setGrabbing] = useState(false);
 	const running = status === 'running' || status === 'starting';
@@ -198,7 +201,20 @@ export function ServiceRow({
 						</span>
 						<span className="flex items-center gap-1.5 font-mono leading-tight text-muted-foreground">
 							{item.port != null && (
-								<span className="font-mono text-[11px]">:{item.port}</span>
+								// Not a <button>: this sits inside the CollapsibleTrigger button.
+								<span
+									role="button"
+									title={`Copy http://localhost:${item.port}`}
+									onClick={(e) => {
+										e.stopPropagation();
+										void navigator.clipboard.writeText(`http://localhost:${item.port}`);
+										setCopied(true);
+										setTimeout(() => setCopied(false), 1000);
+									}}
+									className="font-mono text-[11px] hover:text-foreground"
+								>
+									{copied ? 'copied!' : `:${item.port}`}
+								</span>
 							)}
 							{portConflict && (
 								<Tooltip>
@@ -214,6 +230,7 @@ export function ServiceRow({
 							{running && metrics && (
 								<span className="font-mono text-[11px] tabular-nums">
 									{metrics.cpuPercent.toFixed(0)}% · {formatBytes(metrics.memoryBytes)}
+									{metrics.uptimeSec != null && ` · ${formatUptime(metrics.uptimeSec)}`}
 								</span>
 							)}
 						</span>
@@ -255,6 +272,12 @@ export function ServiceRow({
 							<Star className={cn('size-3', item.favorite && 'fill-amber-400 text-amber-400')} />
 							{item.favorite ? 'Unfavorite' : 'Favorite'}
 						</Button>
+						{item.dir && (
+							<Button variant="outline" size="xs" onClick={act(() => revealInFinder(item.id))}>
+								<FolderOpen />
+								Reveal
+							</Button>
+						)}
 						<Button
 							variant="destructive"
 							size="xs"

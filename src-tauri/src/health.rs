@@ -64,6 +64,24 @@ pub fn aggregate_status(statuses: impl Iterator<Item = Status>) -> Option<Status
 	any_starting.then_some(Status::Starting)
 }
 
+/// Build the error message for an exited process: the exit code when known
+/// (owned children; signal deaths and adopted PIDs have none) plus the last
+/// few log lines so the cause is visible without opening the log.
+pub fn exit_error(exit_code: Option<i32>, log_path: &std::path::Path) -> String {
+	let mut msg = match exit_code {
+		Some(code) => format!("process exited with code {code}"),
+		None => "process exited".to_string(),
+	};
+	if let Ok(text) = std::fs::read_to_string(log_path) {
+		let tail: Vec<&str> = text.lines().rev().take(3).collect();
+		if !tail.is_empty() {
+			let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+			msg = format!("{msg}\n{tail}");
+		}
+	}
+	msg
+}
+
 /// True if a TCP connection to 127.0.0.1:port succeeds within 300ms.
 pub fn port_open(port: u16) -> bool {
 	let Ok(mut addrs) = format!("127.0.0.1:{port}").to_socket_addrs() else { return false; };
@@ -137,16 +155,19 @@ pub fn poll_once(app: &AppHandle) {
 			_ => match item.run_mode {
 				RunMode::Background => {
 					// Check liveness while holding the lock briefly, then release before blocking I/O.
-					let pid_alive: Option<bool> = {
+					let probed: Option<(bool, Option<i32>)> = {
 						let mut running = state.running.lock().unwrap();
-						running.get_mut(&item.id).map(|r| crate::supervisor::is_alive(r))
+						running.get_mut(&item.id).map(|r| {
+							(crate::supervisor::is_alive(r), crate::supervisor::exit_code(r))
+						})
 					};
-					match pid_alive {
+					match probed {
 						None => Status::Stopped,
-						Some(alive) => {
+						Some((alive, exit_code)) => {
 							if !alive {
+								let log_path = state.dir.join("logs").join(format!("{}.log", item.id));
 								state.errors.lock().unwrap()
-									.insert(item.id.clone(), "process exited".into());
+									.insert(item.id.clone(), exit_error(exit_code, &log_path));
 							}
 							let has_port = item.port.is_some();
 							// Port/HTTP checks happen outside any lock (can block up to 500 ms).
@@ -226,6 +247,22 @@ mod tests {
 	fn terminal_untracked_no_port_keeps_last_known() {
 		assert_eq!(terminal_status(None, false, false, Some(Status::Running)), Status::Running);
 		assert_eq!(terminal_status(None, false, false, None), Status::Stopped);
+	}
+
+	#[test]
+	fn exit_error_includes_code_and_log_tail() {
+		let dir = std::env::temp_dir().join(format!("msm-he-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let log = dir.join("x.log");
+		std::fs::write(&log, "one\ntwo\nthree\nfour\n").unwrap();
+		let msg = exit_error(Some(1), &log);
+		assert!(msg.starts_with("process exited with code 1"));
+		// Only the last 3 lines are appended.
+		assert!(msg.contains("two\nthree\nfour"));
+		assert!(!msg.contains("one"));
+		// Unknown code + missing log → the bare message.
+		assert_eq!(exit_error(None, &dir.join("missing.log")), "process exited");
+		std::fs::remove_dir_all(&dir).ok();
 	}
 
 	#[test]

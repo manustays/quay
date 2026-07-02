@@ -194,6 +194,7 @@ pub fn run() {
 			commands::set_suppress_hide,
 			commands::kill_discovered,
 			commands::ignore_port,
+			commands::reveal_in_finder,
 		])
 		.setup(|app| {
 			// Menubar-only: hide the dock icon (and Cmd-Tab entry). Accessory keeps

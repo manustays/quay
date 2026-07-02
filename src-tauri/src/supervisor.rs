@@ -155,6 +155,15 @@ pub fn is_alive(running: &mut Running) -> bool {
 	}
 }
 
+/// Exit code of an owned process that has already exited, if known.
+///
+/// `try_wait` caches the status once the child is reaped, so this is safe to
+/// call after [`is_alive`] returned `false`. `None` for adopted processes (no
+/// `Child` handle) and for signal-terminated children (no exit code).
+pub fn exit_code(running: &mut Running) -> Option<i32> {
+	running.child.as_mut()?.try_wait().ok().flatten()?.code()
+}
+
 /// Parse `lsof -t` output (one PID per line) into a sorted, de-duplicated list.
 ///
 /// Tolerates blank lines and non-numeric garbage. Sorting makes PID selection
