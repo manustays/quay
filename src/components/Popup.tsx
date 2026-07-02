@@ -8,8 +8,8 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { matchesSearch, splitFavorites, type ItemMetrics, type ManagedItem, type Status } from '../model';
-import { stopAll } from '../ipc';
+import { matchesSearch, moveInList, splitFavorites, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { reorder, stopAll } from '../ipc';
 import { BuoyMark } from './BuoyMark';
 import { ServiceRow } from './ServiceRow';
 
@@ -36,10 +36,64 @@ export function Popup({
 	onSettings,
 }: PopupProps): React.JSX.Element {
 	const [query, setQuery] = useState('');
+	// Drag-to-reorder state: which section a drag started in, its origin index, and the hovered target.
+	const [drag, setDrag] = useState<{ group: 'fav' | 'other'; from: number } | null>(null);
+	const [overIdx, setOverIdx] = useState<number | null>(null);
 	const statusOf = (i: ManagedItem): Status => statuses.get(i.id) ?? 'stopped';
 
 	const filtered = items.filter((i) => matchesSearch(i, query));
 	const { favorites, others } = splitFavorites(filtered);
+	// Reordering only makes sense on the full, unfiltered list.
+	const canReorder = query === '';
+
+	/** Persist a new order (favorites first, then others) to the backend and refresh. */
+	const commitOrder = async (fav: ManagedItem[], oth: ManagedItem[]) => {
+		await reorder([...fav, ...oth].map((i) => i.id));
+		onChange();
+	};
+
+	const handleDrop = (group: 'fav' | 'other', to: number) => {
+		if (drag && drag.group === group && drag.from !== to) {
+			if (group === 'fav') void commitOrder(moveInList(favorites, drag.from, to), others);
+			else void commitOrder(favorites, moveInList(others, drag.from, to));
+		}
+		setDrag(null);
+		setOverIdx(null);
+	};
+
+	/** Drag props for a row at `localIndex` within its `group` (empty when reorder is off). */
+	const dragProps = (group: 'fav' | 'other', localIndex: number) =>
+		canReorder
+			? {
+					reorder: true,
+					// Insertion line: below the target when moving down, above when moving up.
+					dropLine:
+						drag?.group === group && overIdx === localIndex && drag.from !== localIndex
+							? drag.from < localIndex
+								? ('bottom' as const)
+								: ('top' as const)
+							: null,
+					onDragStart: (e: React.DragEvent) => {
+						setDrag({ group, from: localIndex });
+						e.dataTransfer.effectAllowed = 'move';
+						e.dataTransfer.setData('text/plain', '');
+					},
+					onDragOver: (e: React.DragEvent) => {
+						if (drag?.group === group) {
+							e.preventDefault();
+							setOverIdx(localIndex);
+						}
+					},
+					onDrop: (e: React.DragEvent) => {
+						e.preventDefault();
+						handleDrop(group, localIndex);
+					},
+					onDragEnd: () => {
+						setDrag(null);
+						setOverIdx(null);
+					},
+				}
+			: {};
 
 	const handleStopAll = async () => {
 		if (confirm('Stop all running services?')) {
@@ -48,7 +102,12 @@ export function Popup({
 		}
 	};
 
-	const renderRow = (item: ManagedItem, index: number) => (
+	const renderRow = (
+		item: ManagedItem,
+		index: number,
+		group: 'fav' | 'other',
+		localIndex: number,
+	) => (
 		<ServiceRow
 			key={item.id}
 			item={item}
@@ -58,6 +117,7 @@ export function Popup({
 			index={index}
 			onChange={onChange}
 			onEdit={onEdit}
+			{...dragProps(group, localIndex)}
 		/>
 	);
 
@@ -115,13 +175,13 @@ export function Popup({
 						{favorites.length > 0 && (
 							<>
 								<SectionLabel>Favorites</SectionLabel>
-								{favorites.map(renderRow)}
+								{favorites.map((item, i) => renderRow(item, i, 'fav', i))}
 							</>
 						)}
 
 						{others.length > 0 &&
 							(query ? (
-								others.map((item, i) => renderRow(item, favorites.length + i))
+								others.map((item, i) => renderRow(item, favorites.length + i, 'other', i))
 							) : (
 								<Collapsible defaultOpen className="mt-0.5">
 									<CollapsibleTrigger className="group/more flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
@@ -129,7 +189,7 @@ export function Popup({
 										More ({others.length})
 									</CollapsibleTrigger>
 									<CollapsibleContent>
-										{others.map((item, i) => renderRow(item, favorites.length + i))}
+										{others.map((item, i) => renderRow(item, favorites.length + i, 'other', i))}
 									</CollapsibleContent>
 								</Collapsible>
 							))}

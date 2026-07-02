@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import {
 	ArrowUpRight,
+	GripVertical,
 	Pencil,
 	Play,
 	Square,
@@ -36,6 +37,14 @@ interface ServiceRowProps {
 	index: number;
 	onChange: () => void;
 	onEdit: (item: ManagedItem) => void;
+	/** When true, show a drag handle and wire the row as a drag source/target. */
+	reorder?: boolean;
+	/** Draw an insertion line above/below this row to show where the drop lands. */
+	dropLine?: 'top' | 'bottom' | null;
+	onDragStart?: React.DragEventHandler;
+	onDragOver?: React.DragEventHandler;
+	onDrop?: React.DragEventHandler;
+	onDragEnd?: () => void;
 }
 
 /** Per-status color for the left accent bar + status dot. */
@@ -67,9 +76,17 @@ export function ServiceRow({
 	index,
 	onChange,
 	onEdit,
+	reorder = false,
+	dropLine = null,
+	onDragStart,
+	onDragOver,
+	onDrop,
+	onDragEnd,
 }: ServiceRowProps): React.JSX.Element {
 	const [open, setOpen] = useState(false);
 	const [log, setLog] = useState<string>('');
+	// Gate `draggable` on the handle so only the grip starts a drag, not the whole row.
+	const [grabbing, setGrabbing] = useState(false);
 	const running = status === 'running' || status === 'starting';
 
 	const handleOpenChange = async (next: boolean) => {
@@ -110,13 +127,50 @@ export function ServiceRow({
 	};
 
 	return (
-		<Collapsible
-			open={open}
-			onOpenChange={handleOpenChange}
-			className="row-in"
-			style={{ animationDelay: `${Math.min(index, 8) * 28}ms` }}
+		<div
+			draggable={reorder && grabbing}
+			onDragStart={onDragStart}
+			onDragOver={onDragOver}
+			onDrop={(e) => {
+				onDrop?.(e);
+				setGrabbing(false);
+			}}
+			onDragEnd={() => {
+				onDragEnd?.();
+				setGrabbing(false);
+			}}
+			className="relative rounded-lg"
 		>
-			<div className="group relative flex items-center gap-2 rounded-lg pr-1.5 pl-3 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]">
+			{dropLine && (
+				<span
+					className={cn(
+						'pointer-events-none absolute inset-x-1 z-10 h-0.5 rounded-full bg-primary',
+						dropLine === 'top' ? '-top-px' : '-bottom-px',
+					)}
+				/>
+			)}
+			<Collapsible
+				open={open}
+				onOpenChange={handleOpenChange}
+				className="row-in"
+				style={{ animationDelay: `${Math.min(index, 8) * 28}ms` }}
+			>
+			<div className={cn(
+				'group relative flex items-center gap-2 rounded-lg pr-1.5 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]',
+				reorder ? 'pl-6' : 'pl-3',
+			)}>
+				{/* Drag handle — only the grip initiates a drag */}
+				{reorder && (
+					<button
+						type="button"
+						aria-label="Drag to reorder"
+						onMouseDown={() => setGrabbing(true)}
+						onMouseUp={() => setGrabbing(false)}
+						className="absolute top-1/2 left-0.5 flex -translate-y-1/2 cursor-grab items-center text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 active:cursor-grabbing"
+					>
+						<GripVertical className="size-3.5" />
+					</button>
+				)}
 				{/* Status accent bar */}
 				<span
 					className={cn(
@@ -202,7 +256,8 @@ export function ServiceRow({
 					</div>
 				</div>
 			</CollapsibleContent>
-		</Collapsible>
+			</Collapsible>
+		</div>
 	);
 }
 

@@ -17,6 +17,7 @@
 				"label": "main",
 				"width": 380,
 				"height": 520,
+				"dragDropEnabled": false,
 				"decorations": false,
 				"resizable": false,
 				"transparent": true,

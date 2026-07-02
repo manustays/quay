@@ -125,3 +125,11 @@ export function splitFavorites(
 		others: sorted.filter(i => !i.favorite),
 	};
 }
+
+/** Return a copy of `list` with the item at index `from` moved to index `to`. */
+export function moveInList<T>(list: T[], from: number, to: number): T[] {
+	const next = [...list];
+	const [moved] = next.splice(from, 1);
+	next.splice(to, 0, moved);
+	return next;
+}
