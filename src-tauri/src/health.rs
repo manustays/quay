@@ -48,6 +48,22 @@ pub fn terminal_status(
 	}
 }
 
+/// Aggregate all item statuses into a tray attention state. Pure.
+///
+/// Precedence: any `Error` > any `Starting` > `None` (nominal). `Running` and
+/// `Stopped` are nominal for the tray, and so is an empty set (no items).
+pub fn aggregate_status(statuses: impl Iterator<Item = Status>) -> Option<Status> {
+	let mut any_starting = false;
+	for status in statuses {
+		match status {
+			Status::Error => return Some(Status::Error),
+			Status::Starting => any_starting = true,
+			Status::Running | Status::Stopped => {}
+		}
+	}
+	any_starting.then_some(Status::Starting)
+}
+
 /// True if a TCP connection to 127.0.0.1:port succeeds within 300ms.
 pub fn port_open(port: u16) -> bool {
 	let Ok(mut addrs) = format!("127.0.0.1:{port}").to_socket_addrs() else { return false; };
@@ -210,5 +226,31 @@ mod tests {
 	fn terminal_untracked_no_port_keeps_last_known() {
 		assert_eq!(terminal_status(None, false, false, Some(Status::Running)), Status::Running);
 		assert_eq!(terminal_status(None, false, false, None), Status::Stopped);
+	}
+
+	#[test]
+	fn aggregate_empty_is_nominal() {
+		// No items at all — nominal, same as all-running/all-stopped.
+		assert_eq!(aggregate_status(std::iter::empty()), None);
+	}
+	#[test]
+	fn aggregate_running_and_stopped_are_nominal() {
+		assert_eq!(aggregate_status([Status::Running, Status::Running].into_iter()), None);
+		assert_eq!(aggregate_status([Status::Stopped, Status::Stopped].into_iter()), None);
+		assert_eq!(aggregate_status([Status::Running, Status::Stopped].into_iter()), None);
+	}
+	#[test]
+	fn aggregate_any_starting_is_starting() {
+		assert_eq!(
+			aggregate_status([Status::Running, Status::Starting, Status::Stopped].into_iter()),
+			Some(Status::Starting)
+		);
+	}
+	#[test]
+	fn aggregate_error_beats_starting() {
+		assert_eq!(
+			aggregate_status([Status::Starting, Status::Error, Status::Running].into_iter()),
+			Some(Status::Error)
+		);
 	}
 }

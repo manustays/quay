@@ -17,6 +17,32 @@ use tauri::{
 	WindowEvent,
 };
 
+/// Reflect the aggregate service status on the tray icon: the buoy's beacon glows
+/// red (any error) or amber (any starting) via colored non-template variants;
+/// otherwise the monochrome template icon (theme-adaptive) is restored.
+///
+/// Safe to call from any thread (e.g. the health-poll loop): tray mutation is
+/// dispatched to the main thread, and the aggregate is computed inside the closure
+/// so the icon reflects the statuses at apply time, not at call time.
+pub fn update_tray_icon(app: &tauri::AppHandle) {
+	let app = app.clone();
+	let _ = app.clone().run_on_main_thread(move || {
+		let aggregate = {
+			let st = app.state::<state::AppState>();
+			let statuses = st.statuses.lock().unwrap();
+			health::aggregate_status(statuses.values().copied())
+		};
+		let (icon, is_template) = match aggregate {
+			Some(model::Status::Error) => (tauri::include_image!("icons/tray-error.png"), false),
+			Some(_) => (tauri::include_image!("icons/tray-starting.png"), false),
+			None => (tauri::include_image!("icons/tray.png"), true),
+		};
+		if let Some(tray) = app.tray_by_id("main") {
+			let _ = tray.set_icon_with_as_template(Some(icon), is_template);
+		}
+	});
+}
+
 /// Check GitHub for a newer release; if the user agrees, download, install, and
 /// restart. `silent` suppresses the "up to date" and check-failure dialogs so the
 /// on-launch check stays quiet when nothing is new or the network is down — the
@@ -270,9 +296,11 @@ pub fn run() {
 			let quit = MenuItemBuilder::with_id("quit", "Quit").build(app)?;
 			let tray_menu = MenuBuilder::new(app).items(&[&check_updates, &quit]).build()?;
 
-			TrayIconBuilder::new()
+			TrayIconBuilder::with_id("main")
 				// Monochrome buoy glyph rendered as a macOS template image so it
 				// auto-inverts (black/white) with the menubar's light/dark theme.
+				// `update_tray_icon` swaps in colored (non-template) variants when
+				// any service errors or is starting.
 				.icon(tauri::include_image!("icons/tray.png"))
 				.icon_as_template(true)
 				.menu(&tray_menu)
@@ -304,6 +332,11 @@ pub fn run() {
 					_ => {}
 				})
 				.build(app)?;
+
+			// Reflect statuses set before the tray existed (reattach / auto-start
+			// above): `set_status` only fires on change, so without this the beacon
+			// would stay monochrome until the next actual transition.
+			update_tray_icon(app.handle());
 
 			// Silent update check shortly after launch — delayed a few seconds so the
 			// tray + popover are settled before any "update available" dialog appears.

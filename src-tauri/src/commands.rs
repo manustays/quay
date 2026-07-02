@@ -105,11 +105,17 @@ pub fn update_item(state: State<AppState>, item: ManagedItem) -> Result<(), AppE
 
 /// Remove the item with `id` and persist.
 #[tauri::command]
-pub fn delete_item(state: State<AppState>, id: String) -> Result<(), AppError> {
+pub fn delete_item(app: AppHandle, state: State<AppState>, id: String) -> Result<(), AppError> {
 	{
 		let mut cfg = state.config.lock().unwrap();
 		cfg.items.retain(|i| i.id != id);
 	}
+	// Drop live status/error too, so a deleted errored item can't keep the tray
+	// beacon lit (the poll loop only iterates configured items and would never
+	// clear it).
+	state.statuses.lock().unwrap().remove(&id);
+	state.errors.lock().unwrap().remove(&id);
+	crate::update_tray_icon(&app);
 	persist(&state)
 }
 
@@ -198,6 +204,7 @@ pub fn set_status(app: &AppHandle, id: &str, status: Status) {
 	if changed {
 		let last_error = state.errors.lock().unwrap().get(id).cloned();
 		let _ = app.emit("status_changed", ItemStatus { id: id.to_string(), status, last_error });
+		crate::update_tray_icon(app);
 	}
 }
 

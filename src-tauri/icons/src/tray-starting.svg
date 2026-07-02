@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 22 22" width="22" height="22" color="#8E8E93" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+  <title>Quay Status Buoy (menubar, starting)</title>
+  <!--
+    Attention variant of tray.svg: rendered as a NON-template tray image, so colors
+    are literal. The buoy body is mid-grey (#8E8E93, legible on both light and dark
+    menubars); only the beacon light glows amber (matches the popup's amber-500
+    accent), with a soft halo behind it.
+  -->
+  <g transform="translate(11 11.5) scale(1.18) translate(-11 -11)">
+    <path d="M9 7h4"/>
+    <path d="M8 11h6"/>
+    <path d="M8.5 7l-2 9h9l-2-9"/>
+    <circle cx="11" cy="4.5" r="3.4" fill="#f59e0b" opacity="0.35" stroke="none"/>
+    <circle cx="11" cy="4.5" r="1.8" fill="#f59e0b" stroke="none"/>
+    <path d="M4.5 18c1.4-.9 2.8-.9 4.2 0s2.8.9 4.2 0 2.8-.9 4.6 0"/>
+  </g>
+</svg>
