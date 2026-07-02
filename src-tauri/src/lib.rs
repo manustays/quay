@@ -5,6 +5,7 @@ pub mod docker;
 pub mod health;
 pub mod metrics;
 pub mod model;
+pub mod scanner;
 pub mod state;
 pub mod store;
 pub mod supervisor;
@@ -191,6 +192,8 @@ pub fn run() {
 			commands::docker_daemon_running,
 			commands::start_docker_daemon,
 			commands::set_suppress_hide,
+			commands::kill_discovered,
+			commands::ignore_port,
 		])
 		.setup(|app| {
 			// Menubar-only: hide the dock icon (and Cmd-Tab entry). Accessory keeps
@@ -266,6 +269,9 @@ pub fn run() {
 
 			// Start the metrics loop (only samples while the popover is visible).
 			metrics::spawn_metrics_loop(app.handle().clone());
+
+			// Start the port radar (only scans while the popover is visible).
+			scanner::spawn_scan_loop(app.handle().clone());
 
 			// Auto-start any items flagged with auto_start = true.
 			{

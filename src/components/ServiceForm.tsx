@@ -68,7 +68,9 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 	const [portText, setPortText] = useState('');
 	const [formulae, setFormulae] = useState<string[]>([]);
 	const [images, setImages] = useState<string[]>([]);
-	const isEdit = item !== null;
+	// An item with an empty id is an add-mode draft (e.g. adopt-from-radar
+	// prefill) — it doesn't exist in the config yet, so save must addItem.
+	const isEdit = item !== null && item.id !== '';
 
 	// Reset all fields whenever the dialog opens (for a fresh item or an edit).
 	useEffect(() => {

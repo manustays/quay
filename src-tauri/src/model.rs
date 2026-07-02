@@ -55,6 +55,8 @@ pub struct Settings {
 	pub metrics_interval_sec: u64,
 	pub browser: String,
 	#[serde(rename = "launchAtLogin")] pub launch_at_login: bool,
+	/// Ports hidden from the discovered-listeners ("Detected") section.
+	#[serde(rename = "ignoredPorts", default)] pub ignored_ports: Vec<u16>,
 }
 
 /// Default metrics sampling interval (seconds). Used both by `Settings::default`
@@ -69,6 +71,7 @@ impl Default for Settings {
 			metrics_interval_sec: default_metrics_interval_sec(),
 			browser: "default".into(),
 			launch_at_login: false,
+			ignored_ports: Vec::new(),
 		}
 	}
 }

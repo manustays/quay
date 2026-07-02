@@ -8,6 +8,7 @@ import {
 	SquareTerminal,
 	Star,
 	Trash2,
+	TriangleAlert,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -18,7 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
-import { formatBytes, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { formatBytes, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import {
 	deleteItem,
 	openBrowser,
@@ -34,6 +35,8 @@ interface ServiceRowProps {
 	status: Status;
 	lastError: string | undefined;
 	metrics: ItemMetrics | undefined;
+	/** Set when this stopped item's port is occupied by a foreign process. */
+	portConflict?: DiscoveredPort;
 	index: number;
 	onChange: () => void;
 	onEdit: (item: ManagedItem) => void;
@@ -73,6 +76,7 @@ export function ServiceRow({
 	status,
 	lastError,
 	metrics,
+	portConflict,
 	index,
 	onChange,
 	onEdit,
@@ -193,6 +197,16 @@ export function ServiceRow({
 						<span className="flex items-center gap-1.5 font-mono leading-tight text-muted-foreground">
 							{item.port != null && (
 								<span className="font-mono text-[11px]">:{item.port}</span>
+							)}
+							{portConflict && (
+								<Tooltip>
+									<TooltipTrigger asChild>
+										<TriangleAlert className="size-3 text-amber-500" />
+									</TooltipTrigger>
+									<TooltipContent>
+										Port {portConflict.port} is in use by {portConflict.name} (pid {portConflict.pid})
+									</TooltipContent>
+								</Tooltip>
 							)}
 							<span className="text-[11px]">{descriptor(item)}</span>
 							{running && metrics && (

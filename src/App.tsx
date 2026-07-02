@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { getItems, getStatuses, onStatusChanged, onMetricsChanged } from './ipc';
-import type { ItemMetrics, ManagedItem, Status } from './model';
+import { detectFolder, getItems, getStatuses, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
+import type { DiscoveredPort, ItemMetrics, ManagedItem, Status } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -30,6 +30,7 @@ export function App(): React.JSX.Element {
 	const [statuses, setStatuses] = useState<Map<string, Status>>(new Map());
 	const [lastErrors, setLastErrors] = useState<Map<string, string>>(new Map());
 	const [metrics, setMetrics] = useState<Map<string, ItemMetrics>>(new Map());
+	const [discovered, setDiscovered] = useState<DiscoveredPort[]>([]);
 
 	// Dialog state: `editing` is undefined when closed, null for "add new",
 	// or the item being edited; `settingsOpen` toggles the settings dialog.
@@ -40,6 +41,33 @@ export function App(): React.JSX.Element {
 
 	const refresh = useCallback(async () => {
 		setItems(await getItems());
+	}, []);
+
+	/**
+	 * Open the add form prefilled from a discovered listener. When the process
+	 * cwd is known, folder detection refines the prefill (manifest start script
+	 * beats raw argv, which may not restart cleanly outside its launcher).
+	 */
+	const adopt = useCallback(async (entry: DiscoveredPort) => {
+		const detected = entry.cwd ? await detectFolder(entry.cwd).catch(() => null) : null;
+		setEditing({
+			id: '', // '' = add-mode draft; the backend assigns a uuid on save
+			name: detected?.name ?? entry.name,
+			kind: 'project',
+			dir: entry.cwd,
+			startCmd: detected?.startCmd ?? entry.command,
+			stopCmd: null,
+			port: entry.port,
+			runMode: 'background',
+			brewFormula: null,
+			dockerImage: null,
+			containerName: null,
+			order: 0,
+			favorite: false,
+			env: {},
+			healthPath: null,
+			autoStart: false,
+		});
 	}, []);
 
 	useEffect(() => {
@@ -71,6 +99,9 @@ export function App(): React.JSX.Element {
 		void onMetricsChanged((list) => {
 			setMetrics(new Map(list.map((m) => [m.id, m])));
 		}).then(track);
+
+		// Port-radar snapshots likewise replace wholesale per scan pass.
+		void onPortsDiscovered(setDiscovered).then(track);
 
 		// Seed current statuses once. `status_changed` only fires on change, so a
 		// status set by the backend's startup poll (before this listener attached)
@@ -105,9 +136,11 @@ export function App(): React.JSX.Element {
 				statuses={statuses}
 				lastErrors={lastErrors}
 				metrics={metrics}
+				discovered={discovered}
 				onChange={refresh}
 				onAdd={() => setEditing(null)}
 				onEdit={(item) => setEditing(item)}
+				onAdopt={(entry) => void adopt(entry)}
 				onSettings={() => setSettingsOpen(true)}
 			/>
 			<ServiceForm

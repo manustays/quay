@@ -42,6 +42,23 @@ export interface Settings {
 	metricsIntervalSec: number;
 	browser: string;
 	launchAtLogin: boolean;
+	/** Ports hidden from the Detected (port radar) section. */
+	ignoredPorts: number[];
+}
+
+/**
+ * An unmanaged TCP listener found by the backend port radar — mirrors the Rust
+ * `DiscoveredPort` struct. `managedItemId` is set when the port belongs to a
+ * registered item (a collision badge, not an adoptable listener).
+ */
+export interface DiscoveredPort {
+	port: number;
+	pid: number;
+	name: string;
+	command: string;
+	cwd: string | null;
+	stack: string | null;
+	managedItemId: string | null;
 }
 
 /**
@@ -71,6 +88,8 @@ export interface DetectResult {
 	kind: ItemKind;
 	startCmd: string | null;
 	port: number | null;
+	/** Detected tech stack keyword (e.g. "vite", "django"), if recognizable. */
+	stack: string | null;
 }
 
 /**

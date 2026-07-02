@@ -460,6 +460,36 @@ pub fn list_docker_images() -> Vec<String> {
 	docker::list_images()
 }
 
+/// Signal a discovered (unmanaged) listener: SIGTERM, or SIGKILL when `force`.
+///
+/// The PID is revalidated against the port's current listeners immediately
+/// before signalling, so a stale radar row (process exited, PID reused) can't
+/// kill an unrelated process. Signals the PID only — never its process group,
+/// which we did not create.
+#[tauri::command]
+pub fn kill_discovered(pid: u32, port: u16, force: bool) -> Result<(), AppError> {
+	if !supervisor::pids_listening(port).contains(&pid) {
+		return Err(AppError::Message(format!("process {pid} no longer listens on :{port}")));
+	}
+	let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
+	unsafe { libc::kill(pid as i32, sig) };
+	Ok(())
+}
+
+/// Hide a port from the discovered-listeners section, persistently.
+/// Un-ignoring happens in Settings (the whole `Settings` is saved back).
+#[tauri::command]
+pub fn ignore_port(state: State<AppState>, port: u16) -> Result<(), AppError> {
+	{
+		let mut cfg = state.config.lock().unwrap();
+		if !cfg.settings.ignored_ports.contains(&port) {
+			cfg.settings.ignored_ports.push(port);
+			cfg.settings.ignored_ports.sort_unstable();
+		}
+	}
+	persist(&state)
+}
+
 /// True if the Docker daemon is currently responding.
 #[tauri::command]
 pub fn docker_daemon_running() -> bool {

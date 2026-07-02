@@ -104,6 +104,27 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 								onCheckedChange={(v) => set({ launchAtLogin: v })}
 							/>
 						</label>
+
+						{settings.ignoredPorts.length > 0 && (
+							<div className="grid gap-1.5">
+								<Label className="text-xs text-muted-foreground">Ignored ports (click to unhide)</Label>
+								<div className="flex flex-wrap gap-1">
+									{settings.ignoredPorts.map((port) => (
+										<button
+											key={port}
+											type="button"
+											onClick={() =>
+												set({ ignoredPorts: settings.ignoredPorts.filter((p) => p !== port) })
+											}
+											className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
+											title={`Stop ignoring port ${port}`}
+										>
+											:{port} ×
+										</button>
+									))}
+								</div>
+							</div>
+						)}
 					</div>
 				)}
 

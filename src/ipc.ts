@@ -1,6 +1,13 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
-import type { ManagedItem, Settings, ItemStatus, ItemMetrics, DetectResult } from './model';
+import type {
+	DetectResult,
+	DiscoveredPort,
+	ItemMetrics,
+	ItemStatus,
+	ManagedItem,
+	Settings,
+} from './model';
 
 export const getItems = () => invoke<ManagedItem[]>('get_items');
 export const addItem = (item: ManagedItem) => invoke<ManagedItem>('add_item', { item });
@@ -62,6 +69,26 @@ export function onStatusChanged(cb: (s: ItemStatus) => void): Promise<UnlistenFn
  */
 export function onMetricsChanged(cb: (m: ItemMetrics[]) => void): Promise<UnlistenFn> {
 	return listen<ItemMetrics[]>('metrics_changed', (e) => cb(e.payload));
+}
+
+/**
+ * Signal an unmanaged discovered listener (SIGTERM, or SIGKILL when `force`).
+ * The backend revalidates that `pid` still owns `port` before signalling, so a
+ * stale radar row can't kill an unrelated process.
+ */
+export const killDiscovered = (pid: number, port: number, force: boolean) =>
+	invoke<void>('kill_discovered', { pid, port, force });
+
+/** Persistently hide `port` from the Detected section (un-ignore in Settings). */
+export const ignorePort = (port: number) => invoke<void>('ignore_port', { port });
+
+/**
+ * Subscribe to port-radar snapshots. The callback receives the full list of
+ * discovered listeners per scan pass (only while the popover is open); replace
+ * state wholesale so vanished listeners drop out. Returns an unlisten function.
+ */
+export function onPortsDiscovered(cb: (d: DiscoveredPort[]) => void): Promise<UnlistenFn> {
+	return listen<DiscoveredPort[]>('ports_discovered', (e) => cb(e.payload));
 }
 
 /**

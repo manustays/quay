@@ -8,9 +8,10 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { matchesSearch, moveInList, splitFavorites, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { reorder, stopAll } from '../ipc';
 import { BuoyMark } from './BuoyMark';
+import { DetectedRow } from './DetectedRow';
 import { ServiceRow } from './ServiceRow';
 
 interface PopupProps {
@@ -18,9 +19,11 @@ interface PopupProps {
 	statuses: Map<string, Status>;
 	lastErrors: Map<string, string>;
 	metrics: Map<string, ItemMetrics>;
+	discovered: DiscoveredPort[];
 	onChange: () => void;
 	onAdd: () => void;
 	onEdit: (item: ManagedItem) => void;
+	onAdopt: (entry: DiscoveredPort) => void;
 	onSettings: () => void;
 }
 
@@ -30,9 +33,11 @@ export function Popup({
 	statuses,
 	lastErrors,
 	metrics,
+	discovered,
 	onChange,
 	onAdd,
 	onEdit,
+	onAdopt,
 	onSettings,
 }: PopupProps): React.JSX.Element {
 	const [query, setQuery] = useState('');
@@ -43,6 +48,12 @@ export function Popup({
 
 	const filtered = items.filter((i) => matchesSearch(i, query));
 	const { favorites, others } = splitFavorites(filtered);
+	// Radar entries on unmanaged ports are adoptable listeners; entries tagged
+	// with a managed item are port collisions, badged on that item's row.
+	const unmanaged = discovered.filter((d) => d.managedItemId == null);
+	const conflicts = new Map(
+		discovered.filter((d) => d.managedItemId != null).map((d) => [d.managedItemId as string, d]),
+	);
 	// Reordering only makes sense on the full, unfiltered list.
 	const canReorder = query === '';
 
@@ -114,6 +125,7 @@ export function Popup({
 			status={statusOf(item)}
 			lastError={lastErrors.get(item.id)}
 			metrics={metrics.get(item.id)}
+			portConflict={statusOf(item) === 'stopped' ? conflicts.get(item.id) : undefined}
 			index={index}
 			onChange={onChange}
 			onEdit={onEdit}
@@ -193,6 +205,21 @@ export function Popup({
 									</CollapsibleContent>
 								</Collapsible>
 							))}
+					</>
+				)}
+
+				{/* Unmanaged listeners found by the port radar (not searched/reordered). */}
+				{query === '' && unmanaged.length > 0 && (
+					<>
+						<SectionLabel>Detected</SectionLabel>
+						{unmanaged.map((entry) => (
+							<DetectedRow
+								key={`${entry.port}:${entry.pid}`}
+								entry={entry}
+								onAdopt={onAdopt}
+								onChange={onChange}
+							/>
+						))}
 					</>
 				)}
 			</div>
