@@ -91,15 +91,17 @@ export function Popup({
 			</header>
 
 			{/* Search toolbar */}
-			<div className="relative px-3.5 pb-2">
-				<Search className="pointer-events-none absolute top-1/2 left-6 size-3.5 -translate-y-1/2 text-muted-foreground" />
-				<Input
-					value={query}
-					onChange={(e) => setQuery(e.target.value)}
-					placeholder="Search services…"
-					className="h-8 rounded-lg bg-muted/60 pl-8 text-[13px] shadow-none"
-					aria-label="Search services"
-				/>
+			<div className="px-3.5 pb-2">
+				<div className="relative">
+					<Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+					<Input
+						value={query}
+						onChange={(e) => setQuery(e.target.value)}
+						placeholder="Search services…"
+						className="h-8 rounded-lg bg-muted/60 pl-8 text-[13px] shadow-none"
+						aria-label="Search services"
+					/>
+				</div>
 			</div>
 
 			{/* List body */}
