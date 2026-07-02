@@ -136,8 +136,6 @@ See the design spec's non-goals for the full list.
 
 ## Roadmap
 
-- Drag-to-reorder in the UI (the backend `reorder` command already exists)
-- Aggregate tray-icon color reflecting overall state
 - Richer error surfacing (exit code + log tail in tooltips)
 - Signed & notarized releases (CI already publishes universal `.dmg`s — see [`.github/workflows/release.yml`](.github/workflows/release.yml))
 
