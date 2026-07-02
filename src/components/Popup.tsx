@@ -50,7 +50,9 @@ export function Popup({
 
 	const filtered = items.filter((i) => matchesSearch(i, query));
 	const { favorites, others } = splitFavorites(filtered);
-	// Group clusters render first within "More"; ungrouped items follow.
+	// Group clusters render first within each section; ungrouped items follow.
+	// A group spanning both sections clusters in each independently.
+	const favParts = groupItems(favorites);
 	const { groups, ungrouped } = groupItems(others);
 	// Radar entries on unmanaged ports are adoptable listeners; entries tagged
 	// with a managed item are port collisions, badged on that item's row.
@@ -63,7 +65,8 @@ export function Popup({
 
 	/** The independent drag lists, in the order their members are persisted. */
 	const dragLists = new Map<string, ManagedItem[]>([
-		['fav', favorites],
+		...favParts.groups.map((g) => [`fav-grp:${g.name}`, g.items] as const),
+		['fav', favParts.ungrouped],
 		...groups.map((g) => [`grp:${g.name}`, g.items] as const),
 		['other', ungrouped],
 	]);
@@ -136,6 +139,29 @@ export function Popup({
 			members.filter((m) => statusOf(m) === 'running' || statusOf(m) === 'starting')
 				.map((m) => stopItem(m.id)),
 		).then(onChange);
+
+	/** Render a section's group clusters followed by its ungrouped rows. */
+	const renderClusters = (
+		parts: { groups: { name: string; items: ManagedItem[] }[]; ungrouped: ManagedItem[] },
+		keyPrefix: string,
+		ungroupedKey: string,
+		baseIndex: number,
+	) => (
+		<>
+			{parts.groups.map((g) => (
+				<div key={g.name}>
+					<GroupHeader
+						name={g.name}
+						status={aggregateGroupStatus(g.items.map(statusOf))}
+						onStart={() => startGroup(g.items)}
+						onStop={() => stopGroup(g.items)}
+					/>
+					{g.items.map((item, i) => renderRow(item, baseIndex + i, `${keyPrefix}${g.name}`, i))}
+				</div>
+			))}
+			{parts.ungrouped.map((item, i) => renderRow(item, baseIndex + i, ungroupedKey, i))}
+		</>
+	);
 
 	const renderRow = (
 		item: ManagedItem,
@@ -211,7 +237,9 @@ export function Popup({
 						{favorites.length > 0 && (
 							<>
 								<SectionLabel>Favorites</SectionLabel>
-								{favorites.map((item, i) => renderRow(item, i, 'fav', i))}
+								{query
+									? favorites.map((item, i) => renderRow(item, i, 'fav', i))
+									: renderClusters(favParts, 'fav-grp:', 'fav', 0)}
 							</>
 						)}
 
@@ -225,20 +253,7 @@ export function Popup({
 										More ({others.length})
 									</CollapsibleTrigger>
 									<CollapsibleContent>
-										{groups.map((g) => (
-											<div key={g.name}>
-												<GroupHeader
-													name={g.name}
-													status={aggregateGroupStatus(g.items.map(statusOf))}
-													onStart={() => startGroup(g.items)}
-													onStop={() => stopGroup(g.items)}
-												/>
-												{g.items.map((item, i) =>
-													renderRow(item, favorites.length + i, `grp:${g.name}`, i),
-												)}
-											</div>
-										))}
-										{ungrouped.map((item, i) => renderRow(item, favorites.length + i, 'other', i))}
+										{renderClusters({ groups, ungrouped }, 'grp:', 'other', favorites.length)}
 									</CollapsibleContent>
 								</Collapsible>
 							))}
@@ -247,17 +262,22 @@ export function Popup({
 
 				{/* Unmanaged listeners found by the port radar (not searched/reordered). */}
 				{query === '' && unmanaged.length > 0 && (
-					<>
-						<SectionLabel>Detected</SectionLabel>
-						{unmanaged.map((entry) => (
-							<DetectedRow
-								key={`${entry.port}:${entry.pid}`}
-								entry={entry}
-								onAdopt={onAdopt}
-								onChange={onChange}
-							/>
-						))}
-					</>
+					<Collapsible className="mt-0.5">
+						<CollapsibleTrigger className="group/det flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
+							<ChevronRight className="size-3 transition-transform group-data-[state=open]/det:rotate-90" />
+							Detected ({unmanaged.length})
+						</CollapsibleTrigger>
+						<CollapsibleContent>
+							{unmanaged.map((entry) => (
+								<DetectedRow
+									key={`${entry.port}:${entry.pid}`}
+									entry={entry}
+									onAdopt={onAdopt}
+									onChange={onChange}
+								/>
+							))}
+						</CollapsibleContent>
+					</Collapsible>
 				)}
 			</div>
 

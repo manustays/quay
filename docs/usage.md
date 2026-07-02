@@ -105,7 +105,7 @@ Standalone command-line tools and binaries — interactive long-running tools ru
 
 ## Service groups
 
-Give related items (say a backend and its frontend) the same **Group** label in the form — the field autocompletes existing group names. Grouped items cluster under a small header inside **More** with:
+Give related items (say a backend and its frontend) the same **Group** label in the form — the field autocompletes existing group names. Grouped items cluster under a small header in their section (Favorites or More; a group spanning both clusters in each) with:
 
 - an **aggregate status dot** — red if any member errored, yellow if any is starting, green when all run, grey otherwise;
 - hover **▶ Start all / ■ Stop all** buttons that act on every member in parallel.
@@ -114,7 +114,7 @@ Drag-reorder works within a group (and within ungrouped items); to move an item 
 
 ## Detected servers (port radar)
 
-While the popover is open, Quay scans your own listening TCP ports every ~5s. Listeners that aren't registered items appear under **DETECTED** with their project name, port, stack icon, and command. Hover a row for:
+While the popover is open, Quay scans your own listening TCP ports every ~5s. Listeners that aren't registered items appear under a collapsible **DETECTED (n)** section (collapsed by default) with their project name, port, stack icon, and command. Hover a row for:
 
 - **＋ Adopt** — opens the add form prefilled (folder, start command, port, stack) so one click turns a stray dev server into a managed service. Saving and starting attaches to the live process — nothing is restarted.
 - **■ Kill** — SIGTERM the process (hold **⌥** for SIGKILL). The pid is re-checked against the port right before signalling.
