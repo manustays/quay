@@ -8,7 +8,7 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { aggregateGroupMetrics, aggregateGroupStatus, formatBytes, formatUptime, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { cn } from '@/lib/utils';
 import { reorder, startItem, stopAll, stopItem } from '../ipc';
 import { BuoyMark } from './BuoyMark';
@@ -149,15 +149,19 @@ export function Popup({
 	) => (
 		<>
 			{parts.groups.map((g) => (
-				<div key={g.name}>
-					<GroupHeader
-						name={g.name}
-						status={aggregateGroupStatus(g.items.map(statusOf))}
-						onStart={() => startGroup(g.items)}
-						onStop={() => stopGroup(g.items)}
-					/>
+				<GroupRow
+					key={g.name}
+					name={g.name}
+					count={g.items.length}
+					status={aggregateGroupStatus(g.items.map(statusOf))}
+					metrics={aggregateGroupMetrics(
+						g.items.map((m) => metrics.get(m.id)).filter((m): m is ItemMetrics => m != null),
+					)}
+					onStart={() => startGroup(g.items)}
+					onStop={() => stopGroup(g.items)}
+				>
 					{g.items.map((item, i) => renderRow(item, baseIndex + i, `${keyPrefix}${g.name}`, i))}
-				</div>
+				</GroupRow>
 			))}
 			{parts.ungrouped.map((item, i) => renderRow(item, baseIndex + i, ungroupedKey, i))}
 		</>
@@ -305,56 +309,97 @@ function SectionLabel({ children }: { children: React.ReactNode }): React.JSX.El
 }
 
 /**
- * Sub-header for a group cluster: aggregate status dot, group name, and
- * hover-revealed start-all / stop-all actions.
+ * A group rendered like a service row: status accent + dot, name, member
+ * count, aggregate metrics (Σ CPU · Σ memory · max uptime), hover-revealed
+ * start-all / stop-all, and a chevron that expands the member rows.
+ * Collapsed by default.
  */
-function GroupHeader({
+function GroupRow({
 	name,
+	count,
 	status,
+	metrics,
 	onStart,
 	onStop,
+	children,
 }: {
 	name: string;
+	count: number;
 	status: Status;
+	metrics: { cpuPercent: number; memoryBytes: number; uptimeSec: number | null } | null;
 	onStart: () => void;
 	onStop: () => void;
+	children: React.ReactNode;
 }): React.JSX.Element {
+	const [open, setOpen] = useState(false);
 	return (
-		<div className="group/hdr flex items-center gap-1.5 rounded-md px-2 pt-1.5 pb-0.5">
-			<span className={cn('size-1.5 shrink-0 rounded-full', STATUS_ACCENT[status])} />
-			<span className="flex-1 truncate font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
-				{name}
-			</span>
-			<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/hdr:opacity-100 focus-within:opacity-100">
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							variant="ghost"
-							size="icon-xs"
-							onClick={onStart}
-							aria-label={`Start all in ${name}`}
-							className="text-muted-foreground hover:text-foreground"
-						>
-							<Play />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>Start all</TooltipContent>
-				</Tooltip>
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							variant="ghost"
-							size="icon-xs"
-							onClick={onStop}
-							aria-label={`Stop all in ${name}`}
-							className="text-muted-foreground hover:text-destructive"
-						>
-							<Square />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>Stop all</TooltipContent>
-				</Tooltip>
+		<Collapsible open={open} onOpenChange={setOpen}>
+			<div className="group relative flex items-center gap-2 rounded-lg pr-1.5 pl-3 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]">
+				{/* Status accent bar (matches ServiceRow) */}
+				<span
+					className={cn(
+						'absolute top-1.5 bottom-1.5 left-0.5 w-[3px] rounded-full',
+						STATUS_ACCENT[status],
+						status === 'starting' && 'animate-pulse',
+					)}
+				/>
+				<CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left outline-none">
+					<span className={cn('size-2 shrink-0 rounded-full', STATUS_ACCENT[status])} />
+					<ChevronRight
+						className={cn(
+							'size-3 shrink-0 text-muted-foreground transition-transform',
+							open && 'rotate-90',
+						)}
+					/>
+					<span className="flex min-w-0 flex-col">
+						<span className="truncate font-heading text-[13px] font-semibold leading-tight">
+							{name}
+						</span>
+						<span className="flex items-center gap-1.5 font-mono text-[11px] leading-tight text-muted-foreground">
+							<span>{count} services</span>
+							{metrics && (
+								<span className="tabular-nums">
+									{metrics.cpuPercent.toFixed(0)}% · {formatBytes(metrics.memoryBytes)}
+									{metrics.uptimeSec != null && ` · ${formatUptime(metrics.uptimeSec)}`}
+								</span>
+							)}
+						</span>
+					</span>
+				</CollapsibleTrigger>
+				<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 group-data-[state=open]:opacity-100">
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon-xs"
+								onClick={onStart}
+								aria-label={`Start all in ${name}`}
+								className="text-muted-foreground hover:text-foreground"
+							>
+								<Play />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Start all</TooltipContent>
+					</Tooltip>
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon-xs"
+								onClick={onStop}
+								aria-label={`Stop all in ${name}`}
+								className="text-muted-foreground hover:text-destructive"
+							>
+								<Square />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Stop all</TooltipContent>
+					</Tooltip>
+				</div>
 			</div>
-		</div>
+			<CollapsibleContent>
+				<div className="ml-2.5 border-l border-border/60 pl-1">{children}</div>
+			</CollapsibleContent>
+		</Collapsible>
 	);
 }

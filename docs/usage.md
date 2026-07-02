@@ -105,12 +105,14 @@ Standalone command-line tools and binaries — interactive long-running tools ru
 
 ## Service groups
 
-Give related items (say a backend and its frontend) the same **Group** label in the form — the field autocompletes existing group names. Grouped items cluster under a small header in their section (Favorites or More; a group spanning both clusters in each) with:
+Give related items (say a backend and its frontend) the same **Group** label in the form — the field autocompletes existing group names. A group renders as a single row in its section (Favorites or More; a group spanning both renders in each), collapsed by default, with:
 
-- an **aggregate status dot** — red if any member errored, yellow if any is starting, green when all run, grey otherwise;
+- an **aggregate status dot/accent** — red if any member errored, yellow if any is starting, green when all run, grey otherwise;
+- a **chevron** — click the row to expand the member rows beneath it;
+- **aggregate metrics** — summed CPU%, summed memory, and the longest member uptime;
 - hover **▶ Start all / ■ Stop all** buttons that act on every member in parallel.
 
-Drag-reorder works within a group (and within ungrouped items); to move an item into or out of a group, edit it. The label is trimmed on save; clearing it ungroups the item.
+Drag-reorder works within an expanded group (and within ungrouped items); to move an item into or out of a group, edit it. The label is trimmed on save; clearing it ungroups the item.
 
 ## Detected servers (port radar)
 

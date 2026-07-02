@@ -201,7 +201,7 @@ export function groupItems(items: ManagedItem[]): {
 }
 
 /**
- * Aggregate member statuses for a group header dot:
+ * Aggregate member statuses for a group row dot:
  * any error > any starting > all running > stopped.
  */
 export function aggregateGroupStatus(statuses: Status[]): Status {
@@ -209,4 +209,20 @@ export function aggregateGroupStatus(statuses: Status[]): Status {
 	if (statuses.includes('starting')) return 'starting';
 	if (statuses.length > 0 && statuses.every((s) => s === 'running')) return 'running';
 	return 'stopped';
+}
+
+/**
+ * Aggregate member metrics for a group row: summed CPU% and memory, max
+ * uptime. Returns null when no member has metrics (nothing running).
+ */
+export function aggregateGroupMetrics(
+	list: ItemMetrics[],
+): { cpuPercent: number; memoryBytes: number; uptimeSec: number | null } | null {
+	if (list.length === 0) return null;
+	const uptimes = list.map((m) => m.uptimeSec).filter((u): u is number => u != null);
+	return {
+		cpuPercent: list.reduce((sum, m) => sum + m.cpuPercent, 0),
+		memoryBytes: list.reduce((sum, m) => sum + m.memoryBytes, 0),
+		uptimeSec: uptimes.length > 0 ? Math.max(...uptimes) : null,
+	};
 }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+	aggregateGroupMetrics,
 	aggregateGroupStatus,
 	groupItems,
 	matchesSearch,
@@ -48,6 +49,14 @@ describe('model helpers', () => {
 		expect(groups.map(g => g.name)).toEqual(['app', 'db']);
 		expect(groups[0].items.map(i => i.id)).toEqual(['a', 'd']);
 		expect(ungrouped.map(i => i.id)).toEqual(['b']);
+	});
+	it('aggregateGroupMetrics sums cpu/mem, maxes uptime', () => {
+		const m = (id: string, cpu: number, mem: number, up: number | null) =>
+			({ id, cpuPercent: cpu, memoryBytes: mem, uptimeSec: up });
+		expect(aggregateGroupMetrics([])).toBeNull();
+		expect(aggregateGroupMetrics([m('a', 10, 100, 5), m('b', 2.5, 50, 60)]))
+			.toEqual({ cpuPercent: 12.5, memoryBytes: 150, uptimeSec: 60 });
+		expect(aggregateGroupMetrics([m('a', 1, 1, null)])?.uptimeSec).toBeNull();
 	});
 	it('aggregateGroupStatus precedence', () => {
 		expect(aggregateGroupStatus(['running', 'error'])).toBe('error');
