@@ -62,6 +62,7 @@ export function App(): React.JSX.Element {
 			brewFormula: null,
 			dockerImage: null,
 			containerName: null,
+			stack: detected?.stack ?? entry.stack,
 			order: 0,
 			favorite: false,
 			env: {},

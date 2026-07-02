@@ -53,6 +53,7 @@ function blank(): ManagedItem {
 		brewFormula: null,
 		dockerImage: null,
 		containerName: null,
+		stack: null,
 		order: 0,
 		favorite: false,
 		env: {},
@@ -138,6 +139,7 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 			kind: det.kind,
 			startCmd: det.startCmd,
 			port: det.port,
+			stack: det.stack,
 		}));
 		setPortText(det.port != null ? String(det.port) : '');
 	};

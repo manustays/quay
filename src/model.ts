@@ -25,6 +25,8 @@ export interface ManagedItem {
 	dockerImage: string | null;
 	/** Container name — the join key for Docker status, stop, and metrics. */
 	containerName: string | null;
+	/** Detected tech stack keyword (e.g. "vite", "django") for the row icon. */
+	stack: string | null;
 	order: number;
 	favorite: boolean;
 	env: Record<string, string>;

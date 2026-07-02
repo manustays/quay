@@ -39,6 +39,8 @@ pub struct ManagedItem {
 	#[serde(rename = "dockerImage", default)] pub docker_image: Option<String>,
 	/// Container name — the join key for Docker status, stop, and metrics.
 	#[serde(rename = "containerName", default)] pub container_name: Option<String>,
+	/// Detected tech stack keyword (e.g. "vite", "django") for the row icon.
+	#[serde(default)] pub stack: Option<String>,
 	pub order: u32,
 	pub favorite: bool,
 	#[serde(default)] pub env: BTreeMap<String, String>,

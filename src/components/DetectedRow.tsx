@@ -3,6 +3,7 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { DiscoveredPort } from '../model';
 import { ignorePort, killDiscovered } from '../ipc';
+import { StackIcon } from './StackIcon';
 
 interface DetectedRowProps {
 	entry: DiscoveredPort;
@@ -34,13 +35,13 @@ export function DetectedRow({ entry, onAdopt, onChange }: DetectedRowProps): Rea
 	return (
 		<div className="group relative flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3 opacity-75 transition-colors hover:bg-foreground/[0.04] hover:opacity-100">
 			<span className="size-2 shrink-0 rounded-full border border-dashed border-muted-foreground/60" />
+			<StackIcon stack={entry.stack} />
 			<span className="flex min-w-0 flex-1 flex-col">
 				<span className="truncate font-heading text-[13px] font-semibold leading-tight">
 					{entry.name}
 				</span>
 				<span className="flex items-center gap-1.5 truncate font-mono text-[11px] leading-tight text-muted-foreground">
 					<span>:{entry.port}</span>
-					{entry.stack && <span>{entry.stack}</span>}
 					<span className="truncate" title={entry.command}>{entry.command}</span>
 				</span>
 			</span>

@@ -19,6 +19,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
+import { StackIcon } from './StackIcon';
 import { formatBytes, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import {
 	deleteItem,
@@ -190,6 +191,7 @@ export function ServiceRow({
 					title={status === 'error' ? lastError : undefined}
 				>
 					<span className={cn('size-2 shrink-0 rounded-full', STATUS_ACCENT[status])} />
+					<StackIcon stack={item.stack ?? (item.kind === 'docker' ? 'docker' : null)} />
 					<span className="flex min-w-0 flex-col">
 						<span className="truncate font-heading text-[13px] font-semibold leading-tight">
 							{item.name}
