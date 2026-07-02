@@ -218,7 +218,7 @@ mod tests {
 			id: "test-id".into(), name: "t".into(), kind: ItemKind::Project,
 			dir: Some(dir.into()), start_cmd: Some(cmd.into()), stop_cmd: None,
 			port: None, run_mode: RunMode::Background, brew_formula: None,
-			docker_image: None, container_name: None, stack: None, order: 0,
+			docker_image: None, container_name: None, stack: None, group: None, order: 0,
 			favorite: false, env: BTreeMap::new(), health_path: None, auto_start: false,
 		}
 	}

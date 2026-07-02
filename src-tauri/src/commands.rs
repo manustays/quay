@@ -76,12 +76,23 @@ pub fn get_items(state: State<AppState>) -> Vec<ManagedItem> {
 	state.config.lock().unwrap().items.clone()
 }
 
+/// Canonicalize the group label: trim whitespace, drop empty to `None` (so
+/// "api", "api " and "" can't silently become distinct groups).
+fn normalize_group(item: &mut ManagedItem) {
+	item.group = item
+		.group
+		.take()
+		.map(|g| g.trim().to_string())
+		.filter(|g| !g.is_empty());
+}
+
 /// Add a new item; assigns a uuid if `item.id` is empty, then persists.
 #[tauri::command]
 pub fn add_item(state: State<AppState>, mut item: ManagedItem) -> Result<ManagedItem, AppError> {
 	if item.id.is_empty() {
 		item.id = uuid::Uuid::new_v4().to_string();
 	}
+	normalize_group(&mut item);
 	{
 		let mut cfg = state.config.lock().unwrap();
 		item.order = cfg.items.len() as u32;
@@ -93,7 +104,8 @@ pub fn add_item(state: State<AppState>, mut item: ManagedItem) -> Result<Managed
 
 /// Replace an existing item by `id`, then persist.
 #[tauri::command]
-pub fn update_item(state: State<AppState>, item: ManagedItem) -> Result<(), AppError> {
+pub fn update_item(state: State<AppState>, mut item: ManagedItem) -> Result<(), AppError> {
+	normalize_group(&mut item);
 	{
 		let mut cfg = state.config.lock().unwrap();
 		if let Some(slot) = cfg.items.iter_mut().find(|i| i.id == item.id) {

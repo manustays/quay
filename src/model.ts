@@ -27,6 +27,8 @@ export interface ManagedItem {
 	containerName: string | null;
 	/** Detected tech stack keyword (e.g. "vite", "django") for the row icon. */
 	stack: string | null;
+	/** Optional group label — grouped items cluster and start/stop together. */
+	group: string | null;
 	order: number;
 	favorite: boolean;
 	env: Record<string, string>;
@@ -153,4 +155,43 @@ export function moveInList<T>(list: T[], from: number, to: number): T[] {
 	const [moved] = next.splice(from, 1);
 	next.splice(to, 0, moved);
 	return next;
+}
+
+/**
+ * Split a list into named group clusters and ungrouped items. Groups are
+ * ordered by their first member's position (i.e. min `order` for an
+ * order-sorted input); members keep their relative order within the group.
+ */
+export function groupItems(items: ManagedItem[]): {
+	groups: { name: string; items: ManagedItem[] }[];
+	ungrouped: ManagedItem[];
+} {
+	const groups: { name: string; items: ManagedItem[] }[] = [];
+	const byName = new Map<string, ManagedItem[]>();
+	const ungrouped: ManagedItem[] = [];
+	for (const item of items) {
+		if (!item.group) {
+			ungrouped.push(item);
+			continue;
+		}
+		let members = byName.get(item.group);
+		if (!members) {
+			members = [];
+			byName.set(item.group, members);
+			groups.push({ name: item.group, items: members });
+		}
+		members.push(item);
+	}
+	return { groups, ungrouped };
+}
+
+/**
+ * Aggregate member statuses for a group header dot:
+ * any error > any starting > all running > stopped.
+ */
+export function aggregateGroupStatus(statuses: Status[]): Status {
+	if (statuses.includes('error')) return 'error';
+	if (statuses.includes('starting')) return 'starting';
+	if (statuses.length > 0 && statuses.every((s) => s === 'running')) return 'running';
+	return 'stopped';
 }

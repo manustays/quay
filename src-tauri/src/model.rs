@@ -41,6 +41,9 @@ pub struct ManagedItem {
 	#[serde(rename = "containerName", default)] pub container_name: Option<String>,
 	/// Detected tech stack keyword (e.g. "vite", "django") for the row icon.
 	#[serde(default)] pub stack: Option<String>,
+	/// Optional group label — items sharing one cluster in the UI and can be
+	/// started/stopped together. Trimmed on save; empty means ungrouped.
+	#[serde(default)] pub group: Option<String>,
 	pub order: u32,
 	pub favorite: bool,
 	#[serde(default)] pub env: BTreeMap<String, String>,

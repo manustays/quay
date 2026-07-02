@@ -35,6 +35,8 @@ interface ServiceFormProps {
 	open: boolean;
 	/** Item to edit, or null to add a new one. */
 	item: ManagedItem | null;
+	/** Existing group names, offered as autocomplete for the Group field. */
+	groups: string[];
 	onOpenChange: (open: boolean) => void;
 	onSaved: () => void;
 }
@@ -54,6 +56,7 @@ function blank(): ManagedItem {
 		dockerImage: null,
 		containerName: null,
 		stack: null,
+		group: null,
 		order: 0,
 		favorite: false,
 		env: {},
@@ -63,7 +66,7 @@ function blank(): ManagedItem {
 }
 
 /** Add/edit dialog. Ports the original form.ts flow into a controlled React form. */
-export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormProps): React.JSX.Element {
+export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: ServiceFormProps): React.JSX.Element {
 	const [data, setData] = useState<ManagedItem>(blank);
 	const [envText, setEnvText] = useState('');
 	const [portText, setPortText] = useState('');
@@ -163,6 +166,7 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 			dockerImage: data.dockerImage || null,
 			containerName: data.containerName?.trim() || null,
 			healthPath: data.healthPath || null,
+			group: data.group?.trim() || null,
 		};
 		// Adding a Docker service while the daemon is down: prompt to start it so the
 		// service is ready to run. Cancelling still saves the config.
@@ -293,6 +297,18 @@ export function ServiceForm({ open, item, onOpenChange, onSaved }: ServiceFormPr
 
 					<Field label="Health path">
 						<Input value={data.healthPath ?? ''} onChange={(e) => set({ healthPath: e.target.value })} placeholder="/health" />
+					</Field>
+
+					<Field label="Group (optional)">
+						<Input
+							value={data.group ?? ''}
+							onChange={(e) => set({ group: e.target.value })}
+							list="group-name-list"
+							placeholder="e.g. myapp"
+						/>
+						<datalist id="group-name-list">
+							{groups.map((g) => <option key={g} value={g} />)}
+						</datalist>
 					</Field>
 
 					<ToggleRow label="Favorite" checked={data.favorite} onChange={(v) => set({ favorite: v })} />

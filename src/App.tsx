@@ -63,6 +63,7 @@ export function App(): React.JSX.Element {
 			dockerImage: null,
 			containerName: null,
 			stack: detected?.stack ?? entry.stack,
+			group: null,
 			order: 0,
 			favorite: false,
 			env: {},
@@ -147,6 +148,7 @@ export function App(): React.JSX.Element {
 			<ServiceForm
 				open={editing !== undefined}
 				item={editing ?? null}
+				groups={Array.from(new Set(items.map((i) => i.group).filter((g): g is string => !!g)))}
 				onOpenChange={(open) => { if (!open) setEditing(undefined); }}
 				onSaved={refresh}
 			/>

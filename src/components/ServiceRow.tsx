@@ -52,7 +52,7 @@ interface ServiceRowProps {
 }
 
 /** Per-status color for the left accent bar + status dot. */
-const STATUS_ACCENT: Record<Status, string> = {
+export const STATUS_ACCENT: Record<Status, string> = {
 	running: 'bg-emerald-500',
 	starting: 'bg-amber-500',
 	stopped: 'bg-zinc-400/70 dark:bg-zinc-500',

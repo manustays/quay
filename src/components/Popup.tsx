@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ChevronRight, CirclePower, Plus, Search, Settings } from 'lucide-react';
+import { ChevronRight, CirclePower, Play, Plus, Search, Settings, Square } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -8,11 +8,12 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
-import { reorder, stopAll } from '../ipc';
+import { aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { cn } from '@/lib/utils';
+import { reorder, startItem, stopAll, stopItem } from '../ipc';
 import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
-import { ServiceRow } from './ServiceRow';
+import { ServiceRow, STATUS_ACCENT } from './ServiceRow';
 
 interface PopupProps {
 	items: ManagedItem[];
@@ -41,13 +42,16 @@ export function Popup({
 	onSettings,
 }: PopupProps): React.JSX.Element {
 	const [query, setQuery] = useState('');
-	// Drag-to-reorder state: which section a drag started in, its origin index, and the hovered target.
-	const [drag, setDrag] = useState<{ group: 'fav' | 'other'; from: number } | null>(null);
+	// Drag-to-reorder state: which drag list a drag started in ('fav', 'other',
+	// or 'grp:<name>'), its origin index, and the hovered target.
+	const [drag, setDrag] = useState<{ group: string; from: number } | null>(null);
 	const [overIdx, setOverIdx] = useState<number | null>(null);
 	const statusOf = (i: ManagedItem): Status => statuses.get(i.id) ?? 'stopped';
 
 	const filtered = items.filter((i) => matchesSearch(i, query));
 	const { favorites, others } = splitFavorites(filtered);
+	// Group clusters render first within "More"; ungrouped items follow.
+	const { groups, ungrouped } = groupItems(others);
 	// Radar entries on unmanaged ports are adoptable listeners; entries tagged
 	// with a managed item are port collisions, badged on that item's row.
 	const unmanaged = discovered.filter((d) => d.managedItemId == null);
@@ -57,23 +61,29 @@ export function Popup({
 	// Reordering only makes sense on the full, unfiltered list.
 	const canReorder = query === '';
 
-	/** Persist a new order (favorites first, then others) to the backend and refresh. */
-	const commitOrder = async (fav: ManagedItem[], oth: ManagedItem[]) => {
-		await reorder([...fav, ...oth].map((i) => i.id));
-		onChange();
-	};
+	/** The independent drag lists, in the order their members are persisted. */
+	const dragLists = new Map<string, ManagedItem[]>([
+		['fav', favorites],
+		...groups.map((g) => [`grp:${g.name}`, g.items] as const),
+		['other', ungrouped],
+	]);
 
-	const handleDrop = (group: 'fav' | 'other', to: number) => {
-		if (drag && drag.group === group && drag.from !== to) {
-			if (group === 'fav') void commitOrder(moveInList(favorites, drag.from, to), others);
-			else void commitOrder(favorites, moveInList(others, drag.from, to));
+	const handleDrop = (key: string, to: number) => {
+		if (drag && drag.group === key && drag.from !== to) {
+			// Move within one list, then persist the full flattened order
+			// (favorites, then each group cluster, then ungrouped).
+			const flat = [...dragLists.keys()].flatMap((k) => {
+				const list = dragLists.get(k) ?? [];
+				return k === key ? moveInList(list, drag.from, to) : list;
+			});
+			void reorder(flat.map((i) => i.id)).then(onChange);
 		}
 		setDrag(null);
 		setOverIdx(null);
 	};
 
-	/** Drag props for a row at `localIndex` within its `group` (empty when reorder is off). */
-	const dragProps = (group: 'fav' | 'other', localIndex: number) =>
+	/** Drag props for a row at `localIndex` within its drag list `group` (empty when reorder is off). */
+	const dragProps = (group: string, localIndex: number) =>
 		canReorder
 			? {
 					reorder: true,
@@ -113,10 +123,24 @@ export function Popup({
 		}
 	};
 
+	/** Start every stopped/errored member; refresh when all have settled. */
+	const startGroup = (members: ManagedItem[]) =>
+		void Promise.allSettled(
+			members.filter((m) => statusOf(m) === 'stopped' || statusOf(m) === 'error')
+				.map((m) => startItem(m.id)),
+		).then(onChange);
+
+	/** Stop every running/starting member; refresh when all have settled. */
+	const stopGroup = (members: ManagedItem[]) =>
+		void Promise.allSettled(
+			members.filter((m) => statusOf(m) === 'running' || statusOf(m) === 'starting')
+				.map((m) => stopItem(m.id)),
+		).then(onChange);
+
 	const renderRow = (
 		item: ManagedItem,
 		index: number,
-		group: 'fav' | 'other',
+		group: string,
 		localIndex: number,
 	) => (
 		<ServiceRow
@@ -201,7 +225,20 @@ export function Popup({
 										More ({others.length})
 									</CollapsibleTrigger>
 									<CollapsibleContent>
-										{others.map((item, i) => renderRow(item, favorites.length + i, 'other', i))}
+										{groups.map((g) => (
+											<div key={g.name}>
+												<GroupHeader
+													name={g.name}
+													status={aggregateGroupStatus(g.items.map(statusOf))}
+													onStart={() => startGroup(g.items)}
+													onStop={() => stopGroup(g.items)}
+												/>
+												{g.items.map((item, i) =>
+													renderRow(item, favorites.length + i, `grp:${g.name}`, i),
+												)}
+											</div>
+										))}
+										{ungrouped.map((item, i) => renderRow(item, favorites.length + i, 'other', i))}
 									</CollapsibleContent>
 								</Collapsible>
 							))}
@@ -243,6 +280,61 @@ function SectionLabel({ children }: { children: React.ReactNode }): React.JSX.El
 	return (
 		<div className="px-2 pt-2 pb-1 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
 			{children}
+		</div>
+	);
+}
+
+/**
+ * Sub-header for a group cluster: aggregate status dot, group name, and
+ * hover-revealed start-all / stop-all actions.
+ */
+function GroupHeader({
+	name,
+	status,
+	onStart,
+	onStop,
+}: {
+	name: string;
+	status: Status;
+	onStart: () => void;
+	onStop: () => void;
+}): React.JSX.Element {
+	return (
+		<div className="group/hdr flex items-center gap-1.5 rounded-md px-2 pt-1.5 pb-0.5">
+			<span className={cn('size-1.5 shrink-0 rounded-full', STATUS_ACCENT[status])} />
+			<span className="flex-1 truncate font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+				{name}
+			</span>
+			<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover/hdr:opacity-100 focus-within:opacity-100">
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant="ghost"
+							size="icon-xs"
+							onClick={onStart}
+							aria-label={`Start all in ${name}`}
+							className="text-muted-foreground hover:text-foreground"
+						>
+							<Play />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>Start all</TooltipContent>
+				</Tooltip>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Button
+							variant="ghost"
+							size="icon-xs"
+							onClick={onStop}
+							aria-label={`Stop all in ${name}`}
+							className="text-muted-foreground hover:text-destructive"
+						>
+							<Square />
+						</Button>
+					</TooltipTrigger>
+					<TooltipContent>Stop all</TooltipContent>
+				</Tooltip>
+			</div>
 		</div>
 	);
 }
