@@ -1,3 +1,19 @@
+# [0.9.0](https://github.com/manustays/quay/compare/v0.8.0...v0.9.0) (2026-07-02)
+
+
+### Bug Fixes
+
+* cluster groups in Favorites too; collapsible Detected section ([86905fe](https://github.com/manustays/quay/commit/86905fe84ee797d88f129e986a8abbb7fe5b0641))
+
+
+### Features
+
+* copy URL, uptime, reveal in Finder, richer exit errors ([85d0996](https://github.com/manustays/quay/commit/85d099657562230c21cc5e64d7145e93a6138f13))
+* group renders as collapsible row with aggregate metrics ([8dab5e9](https://github.com/manustays/quay/commit/8dab5e93e169095f46f7915293308de125f2f63c))
+* port radar — discover, adopt, kill unmanaged listeners ([3ad21a5](https://github.com/manustays/quay/commit/3ad21a5e1adf07093a0cc7853daa48688fe8e03c))
+* service groups — cluster related services, start/stop together ([3c6535e](https://github.com/manustays/quay/commit/3c6535ec041ca42b59399293d0b4078d0c5c196f))
+* tech-stack detection with brand icons on service rows ([4f2e53d](https://github.com/manustays/quay/commit/4f2e53d5eaf026ac5292f45f178e52769c56e2b6))
+
 # [0.8.0](https://github.com/manustays/quay/compare/v0.7.0...v0.8.0) (2026-07-02)
 
 
