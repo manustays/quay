@@ -51,7 +51,11 @@ Status at a glance: ● running (green) · ◐ starting (yellow) · ○ stopped 
 - **Open in browser** — one click opens `http://localhost:<port>`.
 - **Open a terminal** already `cd`'d into the service's folder, when you actually need to watch logs.
 - **Auto-detect on add** — pick a folder and the app reads `package.json` / `requirements.txt` / `.env` to pre-fill the start command and port.
+- **Port radar** — dev servers you started outside Quay show up in a **Detected** section (project name + framework icon), with one-click **adopt as service**, kill, or ignore. A stopped item whose port is taken by another process gets a ⚠ collision badge.
+- **Tech-stack icons** — rows show the detected framework/runtime (Vite, Next, Django, Rails, Go, Rust, Docker, …) as a brand-colored icon.
+- **Groups** — label related items (backend + frontend of one app) with a shared group; they cluster together with an aggregate status dot and start-all/stop-all.
 - **Favorites + search** — pin the services you use most; the rest tuck under a collapsible "More".
+- **Quality of life** — click a port to copy its `localhost` URL, per-row uptime, reveal-in-Finder, and crash errors that include the exit code + last log lines.
 - **Per-item env vars, custom health path, and auto-start-on-launch.**
 - **Configurable terminal** (Terminal.app or iTerm2) and **launch-at-login**.
 - **Native & light** — built with Tauri v2 (Rust core + system webview), no bundled Chromium.
@@ -113,6 +117,7 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 | [Installation](docs/installation.md) | Prerequisites, build from source, install the `.app` |
 | [Usage](docs/usage.md) | Adding items, run modes, status, browser/terminal actions, favorites |
 | [Docker services](docs/docker-services.md) | Running and monitoring Docker containers as items |
+| [Port radar](docs/port-radar.md) | How unmanaged listeners are discovered, adopted, killed, ignored |
 | [Metrics](docs/metrics.md) | How live CPU/memory sampling works (processes + `docker stats`) |
 | [Configuration](docs/configuration.md) | `config.json` location + full field reference |
 | [Packaging & distribution](docs/packaging.md) | Build a `.dmg`, code-sign, notarize, and the release CI |
@@ -136,7 +141,6 @@ See the design spec's non-goals for the full list.
 
 ## Roadmap
 
-- Richer error surfacing (exit code + log tail in tooltips)
 - Signed & notarized releases (CI already publishes universal `.dmg`s — see [`.github/workflows/release.yml`](.github/workflows/release.yml))
 
 ## Contributing

@@ -8,7 +8,10 @@ Left-click the menubar icon to open the popover. It has:
 
 - A **search box** and a **Stop all** button at the top.
 - A **FAVORITES** section (items you've starred).
-- A collapsible **More (n)** section for everything else.
+- A collapsible **More (n)** section for everything else. Items that share a
+  [group](#service-groups) cluster under a small group header there.
+- A **DETECTED** section listing unmanaged dev servers found by the
+  [port radar](port-radar.md) — adopt, kill, or ignore them.
 - A footer with **+ Add** and **⚙ Settings**.
 
 Right-click the menubar icon for the **Quit** menu. Quitting stops every background service the app started.
@@ -26,7 +29,9 @@ Each row shows a colored dot:
 
 Status is refreshed automatically by a background poll (every few seconds, configurable). You never need to manually refresh.
 
-Running rows also show live **CPU% · memory** next to the port — sampled only while the popover is open, every 10s by default. See [metrics](metrics.md).
+Running rows also show live **CPU% · memory · uptime** next to the port — sampled only while the popover is open, every 10s by default. See [metrics](metrics.md). A detected tech stack (Vite, Django, Rails, …) shows as a small brand icon before the name.
+
+If a **stopped** item's port is occupied by some other process, an amber ⚠ appears next to the port — hover it to see which process (name + pid) is holding the port.
 
 ### Row actions
 
@@ -36,7 +41,9 @@ Running rows also show live **CPU% · memory** next to the port — sampled only
 | ↗ | Open `http://localhost:<port>` in your browser | the item has a port |
 | >_ | Open a terminal `cd`'d into the item's folder | the item has a folder |
 
-Click the **body** of a row to expand it — you'll see the tail of its log file, plus **Edit**, **Delete**, and toggles for **Favorite** and **Auto-start**.
+Clicking the **`:port` label** copies `http://localhost:<port>` to the clipboard.
+
+Click the **body** of a row to expand it — you'll see the tail of its log file, plus **Edit**, **Favorite**, **Reveal** (show the folder in Finder), and **Delete**.
 
 ## The four kinds of items
 
@@ -96,6 +103,25 @@ Standalone command-line tools and binaries — interactive long-running tools ru
    - **Auto-start** — start this item automatically when the app launches.
 5. **Save.**
 
+## Service groups
+
+Give related items (say a backend and its frontend) the same **Group** label in the form — the field autocompletes existing group names. Grouped items cluster under a small header inside **More** with:
+
+- an **aggregate status dot** — red if any member errored, yellow if any is starting, green when all run, grey otherwise;
+- hover **▶ Start all / ■ Stop all** buttons that act on every member in parallel.
+
+Drag-reorder works within a group (and within ungrouped items); to move an item into or out of a group, edit it. The label is trimmed on save; clearing it ungroups the item.
+
+## Detected servers (port radar)
+
+While the popover is open, Quay scans your own listening TCP ports every ~5s. Listeners that aren't registered items appear under **DETECTED** with their project name, port, stack icon, and command. Hover a row for:
+
+- **＋ Adopt** — opens the add form prefilled (folder, start command, port, stack) so one click turns a stray dev server into a managed service. Saving and starting attaches to the live process — nothing is restarted.
+- **■ Kill** — SIGTERM the process (hold **⌥** for SIGKILL). The pid is re-checked against the port right before signalling.
+- **👁 Ignore** — hide this port permanently (undo in Settings).
+
+See [Port radar](port-radar.md) for how detection works and its limits.
+
 ## Editing & deleting
 
 Expand a row → **Edit** to reopen the form pre-filled, or **Delete** (with confirmation) to remove it. Favorites and auto-start can also be toggled from the expanded row.
@@ -112,6 +138,7 @@ The header **Stop all** button (with confirmation) stops every running backgroun
 - **Poll interval (sec)** — how often status is checked (default 3).
 - **Metrics interval (sec)** — how often per-process CPU%/memory are sampled while the popover is open (default 10). See [metrics](metrics.md).
 - **Launch at login** — register/unregister the app as a macOS login item.
+- **Ignored ports** — chips for every port you've hidden from the DETECTED section; click one to unhide it.
 
 ## Where things live
 

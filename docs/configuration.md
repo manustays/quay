@@ -36,6 +36,7 @@ The file is written atomically (temp file + rename) on every change. If it ever 
 | `metricsIntervalSec` | number | `10` | How often (seconds) per-process CPU%/memory are sampled **while the popover is open**. No sampling happens while it's closed. Minimum 1. See [metrics](metrics.md). |
 | `browser` | string | `"default"` | Reserved; the browser action currently always uses the system default browser. |
 | `launchAtLogin` | boolean | `false` | Whether the app is registered as a macOS login item. Toggle via Settings (it also calls the OS API). |
+| `ignoredPorts` | number[] | `[]` | Ports hidden from the popover's DETECTED (port radar) section. Add via a detected row's **Ignore** action; remove via the chips in Settings. |
 
 ## `items[]`
 
@@ -54,6 +55,8 @@ Each registered service:
   "brewFormula": null,         // e.g. "mysql" when kind = "brew"
   "dockerImage": null,         // e.g. "postgres:16" when kind = "docker"
   "containerName": null,       // container name when kind = "docker"
+  "stack": "vite",             // detected tech stack (row icon); null if unknown
+  "group": null,               // optional group label; grouped items cluster + start/stop together
   "order": 0,                  // sort position in the menu
   "favorite": false,           // shown in the FAVORITES section when true
   "env": { "NODE_ENV": "development" }, // merged into the process env at spawn
@@ -77,6 +80,8 @@ Each registered service:
 | `brewFormula` | string \| null | Homebrew formula name when `kind = "brew"`. |
 | `dockerImage` | string \| null | Docker image to run when `kind = "docker"`, e.g. `postgres:16`. |
 | `containerName` | string \| null | Container name when `kind = "docker"` (required for docker items). Quay reuses an existing container with this name, or runs a new one. |
+| `stack` | string \| null | Detected tech stack keyword (e.g. `"vite"`, `"django"`), set at add/adopt time from the folder's manifests; drives the row's brand icon. `null` renders no icon. |
+| `group` | string \| null | Optional group label. Items sharing a label cluster under a group header with aggregate status and start-all/stop-all. Trimmed on save; empty = ungrouped. |
 | `order` | number | Menu sort order. |
 | `favorite` | boolean | Pin to the FAVORITES section. |
 | `env` | object (string→string) | Extra environment variables merged onto your shell env at spawn. **Plain text — dev variables only, not secrets.** |
