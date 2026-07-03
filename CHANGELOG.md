@@ -1,3 +1,15 @@
+# [0.12.0](https://github.com/manustays/quay/compare/v0.11.0...v0.12.0) (2026-07-03)
+
+
+### Bug Fixes
+
+* update README formatting for improved readability and consistency ([911be09](https://github.com/manustays/quay/commit/911be09bb0fa42b4475bf50cd849d4629f82add9))
+
+
+### Features
+
+* add new images for quay desktop in assets ([9f592e6](https://github.com/manustays/quay/commit/9f592e64f985f5d6a767d24ef28aa690042a0a2c))
+
 # [0.11.0](https://github.com/manustays/quay/compare/v0.10.0...v0.11.0) (2026-07-03)
 
 
