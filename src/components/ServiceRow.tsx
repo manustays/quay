@@ -42,6 +42,9 @@ interface ServiceRowProps {
 	/** Set when this stopped item's port is occupied by a foreign process. */
 	portConflict?: DiscoveredPort;
 	index: number;
+	/** Expansion is owned by the parent so only one row is open at a time. */
+	open: boolean;
+	onOpenChange: (next: boolean) => void;
 	onChange: () => void;
 	onEdit: (item: ManagedItem) => void;
 	/** When true, show a drag handle and wire the row as a drag source/target. */
@@ -82,6 +85,8 @@ export function ServiceRow({
 	metrics,
 	portConflict,
 	index,
+	open,
+	onOpenChange,
 	onChange,
 	onEdit,
 	reorder = false,
@@ -91,7 +96,6 @@ export function ServiceRow({
 	onDrop,
 	onDragEnd,
 }: ServiceRowProps): React.JSX.Element {
-	const [open, setOpen] = useState(false);
 	const [log, setLog] = useState<string>('');
 	const [copied, setCopied] = useState(false);
 	// Gate `draggable` on the handle so only the grip starts a drag, not the whole row.
@@ -99,7 +103,7 @@ export function ServiceRow({
 	const running = status === 'running' || status === 'starting';
 
 	const handleOpenChange = async (next: boolean) => {
-		setOpen(next);
+		onOpenChange(next);
 		if (next) setLog(await tailLog(item.id, 20).catch(() => ''));
 	};
 

@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronRight, CirclePower, Play, Plus, Search, Settings, Square } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
+import { ChevronRight, CirclePower, Play, Plus, Search, Settings, Square, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -47,6 +47,18 @@ export function Popup({
 	onSettings,
 }: PopupProps): React.JSX.Element {
 	const [query, setQuery] = useState('');
+	// Which service row is expanded — single-open accordion across all rows.
+	const [expandedId, setExpandedId] = useState<string | null>(null);
+	const [searchOpen, setSearchOpen] = useState(false);
+	const searchRef = useRef<HTMLInputElement>(null);
+	// Focus the field once it's painted (rAF avoids racing the conditional render).
+	useEffect(() => {
+		if (searchOpen) requestAnimationFrame(() => searchRef.current?.focus());
+	}, [searchOpen]);
+	const closeSearch = (): void => {
+		setSearchOpen(false);
+		setQuery('');
+	};
 	// Drag-to-reorder state: which drag list a drag started in ('fav', 'other',
 	// or 'grp:<name>'), its origin index, and the hovered target.
 	const [drag, setDrag] = useState<{ group: string; from: number } | null>(null);
@@ -210,25 +222,71 @@ export function Popup({
 			metrics={metrics.get(item.id)}
 			portConflict={statusOf(item) === 'stopped' ? conflicts.get(item.id) : undefined}
 			index={index}
+			open={expandedId === item.id}
+			onOpenChange={(next) => setExpandedId(next ? item.id : null)}
 			onChange={onChange}
 			onEdit={onEdit}
 			{...dragProps(group, localIndex)}
 		/>
 	);
 
+	// ponytail: bg-background is fully opaque (no desktop bleed); add a /NN suffix to bring some vibrancy back.
 	return (
-		<div className="flex h-screen flex-col overflow-hidden rounded-xl border border-border/60 bg-background/55 text-[13px] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.10)] backdrop-saturate-150">
+		<div className="flex h-screen flex-col overflow-hidden rounded-xl border border-border/60 bg-background text-[13px] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.10)]">
 			{/* Brand bar */}
 			<header className="flex items-center gap-2 px-3.5 pt-3 pb-2">
-				<BuoyMark className="size-6 shrink-0" />
-				<div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-					<h1 className="truncate font-heading text-[14px] font-semibold tracking-tight">
-						{__APP_NAME__}
-					</h1>
-					<span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground tabular-nums">
-						v{__APP_VERSION__}
-					</span>
-				</div>
+				{searchOpen ? (
+					<div className="relative flex min-w-0 flex-1 items-center">
+						<Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
+						<Input
+							ref={searchRef}
+							value={query}
+							onChange={(e) => setQuery(e.target.value)}
+							onKeyDown={(e) => e.key === 'Escape' && closeSearch()}
+							placeholder="Search services…"
+							className="h-8 rounded-md bg-muted/60 pl-8 text-[13px] shadow-none"
+							aria-label="Search services"
+						/>
+					</div>
+				) : (
+					<>
+						<BuoyMark className="size-6 shrink-0" />
+						<div className="flex min-w-0 flex-1 items-baseline gap-1.5">
+							<h1 className="truncate font-heading text-[14px] font-semibold tracking-tight">
+								{__APP_NAME__}
+							</h1>
+							<span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground tabular-nums">
+								v{__APP_VERSION__}
+							</span>
+						</div>
+					</>
+				)}
+				{searchOpen ? (
+					<Button
+						variant="ghost"
+						size="icon-sm"
+						onClick={closeSearch}
+						aria-label="Close search"
+						className="text-muted-foreground hover:text-foreground"
+					>
+						<X />
+					</Button>
+				) : (
+					<Tooltip>
+						<TooltipTrigger asChild>
+							<Button
+								variant="ghost"
+								size="icon-sm"
+								onClick={() => setSearchOpen(true)}
+								aria-label="Search services"
+								className="text-muted-foreground hover:text-foreground"
+							>
+								<Search />
+							</Button>
+						</TooltipTrigger>
+						<TooltipContent>Search</TooltipContent>
+					</Tooltip>
+				)}
 				<Tooltip>
 					<TooltipTrigger asChild>
 						<Button
@@ -244,20 +302,6 @@ export function Popup({
 					<TooltipContent>Stop all</TooltipContent>
 				</Tooltip>
 			</header>
-
-			{/* Search toolbar */}
-			<div className="px-3.5 pb-2">
-				<div className="relative">
-					<Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-muted-foreground" />
-					<Input
-						value={query}
-						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Search services…"
-						className="h-8 rounded-lg bg-muted/60 pl-8 text-[13px] shadow-none"
-						aria-label="Search services"
-					/>
-				</div>
-			</div>
 
 			{/* List body */}
 			<div className="scroll-area flex-1 px-2 pb-1">
