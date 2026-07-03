@@ -1,31 +1,33 @@
 import { EyeOff, Plus, Square } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import type { DiscoveredPort } from '../model';
 import { ignorePort, killDiscovered } from '../ipc';
 import { StackIcon } from './StackIcon';
+import { IconAction } from './RowBits';
 
 interface DetectedRowProps {
 	entry: DiscoveredPort;
 	/** Open the add-service form prefilled from this listener. */
 	onAdopt: (entry: DiscoveredPort) => void;
 	onChange: () => void;
+	/** Remove this entry from the list now — the next radar scan is up to 5 s away. */
+	onDismiss: (entry: DiscoveredPort) => void;
 }
 
 /**
  * A read-only row for an unmanaged listener found by the port radar. Dimmed
  * relative to registered services; hover reveals Adopt / Kill / Ignore.
  */
-export function DetectedRow({ entry, onAdopt, onChange }: DetectedRowProps): React.JSX.Element {
-	// Docker published ports belong to Docker Desktop's proxy, not a project —
-	// manage those via a Docker-kind service instead of adopting the proxy.
-	const adoptable = entry.stack !== 'docker';
-
-	/** Run an ipc action, surface errors, then refresh. */
+export function DetectedRow({ entry, onAdopt, onChange, onDismiss }: DetectedRowProps): React.JSX.Element {
+	/**
+	 * Run an ipc action, surface errors, then refresh. On success the row is
+	 * dismissed immediately — leaving it visible until the next scan invites a
+	 * second Kill click, which would error on the already-dead process.
+	 */
 	const act = (fn: () => Promise<unknown>) => async (e: React.MouseEvent) => {
 		e.stopPropagation();
 		try {
 			await fn();
+			onDismiss(entry);
 		} catch (err) {
 			alert(String(err));
 		}
@@ -47,51 +49,23 @@ export function DetectedRow({ entry, onAdopt, onChange }: DetectedRowProps): Rea
 			</span>
 
 			<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-				{adoptable && (
-					<DetectedAction label="Adopt as service" onClick={(e) => { e.stopPropagation(); onAdopt(entry); }}>
+				{entry.adoptable && (
+					<IconAction label="Adopt as service" onClick={(e) => { e.stopPropagation(); onAdopt(entry); }}>
 						<Plus />
-					</DetectedAction>
+					</IconAction>
 				)}
-				<DetectedAction
+				<IconAction
 					label="Kill process (⌥ = force)"
 					onClick={(e) =>
 						void act(() => killDiscovered(entry.pid, entry.port, e.altKey))(e)
 					}
 				>
 					<Square />
-				</DetectedAction>
-				<DetectedAction label="Ignore this port" onClick={act(() => ignorePort(entry.port))}>
+				</IconAction>
+				<IconAction label="Ignore this port" onClick={act(() => ignorePort(entry.port))}>
 					<EyeOff />
-				</DetectedAction>
+				</IconAction>
 			</div>
 		</div>
-	);
-}
-
-/** Small icon button used for detected-row actions, wrapped in a tooltip. */
-function DetectedAction({
-	label,
-	onClick,
-	children,
-}: {
-	label: string;
-	onClick: (e: React.MouseEvent) => void;
-	children: React.ReactNode;
-}): React.JSX.Element {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					variant="ghost"
-					size="icon-xs"
-					onClick={onClick}
-					aria-label={label}
-					className="text-muted-foreground hover:text-foreground focus-visible:opacity-100"
-				>
-					{children}
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>{label}</TooltipContent>
-		</Tooltip>
 	);
 }

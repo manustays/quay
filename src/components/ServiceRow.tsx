@@ -8,8 +8,8 @@ import {
 	Square,
 	SquareTerminal,
 	Star,
-	Trash2,
 	TriangleAlert,
+	X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -21,9 +21,10 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { StackIcon } from './StackIcon';
-import { formatBytes, formatUptime, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { IconAction, MetricsText } from './RowBits';
+import type { DiscoveredPort, ItemMetrics, ManagedItem, Status } from '../model';
 import {
-	deleteItem,
+	markStopped,
 	openBrowser,
 	openTerminal,
 	revealInFinder,
@@ -100,6 +101,13 @@ export function ServiceRow({
 	const handleOpenChange = async (next: boolean) => {
 		setOpen(next);
 		if (next) setLog(await tailLog(item.id, 20).catch(() => ''));
+	};
+
+	/** Copy the service URL and flash the "copied!" label. */
+	const copyUrl = () => {
+		void navigator.clipboard.writeText(`http://localhost:${item.port}`);
+		setCopied(true);
+		setTimeout(() => setCopied(false), 1000);
 	};
 
 	/** Run an ipc action, surface errors, then refresh. */
@@ -201,15 +209,23 @@ export function ServiceRow({
 						</span>
 						<span className="flex items-center gap-1.5 font-mono leading-tight text-muted-foreground">
 							{item.port != null && (
-								// Not a <button>: this sits inside the CollapsibleTrigger button.
+								// Not a <button>: this sits inside the CollapsibleTrigger button,
+								// so it carries its own tabIndex + key handling to stay reachable
+								// by keyboard despite the nesting.
 								<span
 									role="button"
+									tabIndex={0}
 									title={`Copy http://localhost:${item.port}`}
 									onClick={(e) => {
 										e.stopPropagation();
-										void navigator.clipboard.writeText(`http://localhost:${item.port}`);
-										setCopied(true);
-										setTimeout(() => setCopied(false), 1000);
+										copyUrl();
+									}}
+									onKeyDown={(e) => {
+										if (e.key === 'Enter' || e.key === ' ') {
+											e.preventDefault();
+											e.stopPropagation();
+											copyUrl();
+										}
 									}}
 									className="font-mono text-[11px] hover:text-foreground"
 								>
@@ -228,10 +244,7 @@ export function ServiceRow({
 							)}
 							<span className="text-[11px]">{descriptor(item)}</span>
 							{running && metrics && (
-								<span className="font-mono text-[11px] tabular-nums">
-									{metrics.cpuPercent.toFixed(0)}% · {formatBytes(metrics.memoryBytes)}
-									{metrics.uptimeSec != null && ` · ${formatUptime(metrics.uptimeSec)}`}
-								</span>
+								<MetricsText metrics={metrics} className="font-mono text-[11px]" />
 							)}
 						</span>
 					</span>
@@ -239,21 +252,21 @@ export function ServiceRow({
 
 				{/* Actions — hidden until row hover / keyboard focus */}
 				<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 group-data-[state=open]:opacity-100">
-					<RowAction
+					<IconAction
 						label={running ? 'Stop' : 'Start'}
 						onClick={act(startOrStop)}
 					>
 						{running ? <Square /> : <Play />}
-					</RowAction>
-					{item.port != null && (
-						<RowAction label="Open in browser" onClick={act(() => openBrowser(item.id))}>
-							<ArrowUpRight />
-						</RowAction>
+					</IconAction>
+					{status === 'error' && (
+						<IconAction label="Mark stopped" onClick={act(() => markStopped(item.id))}>
+							<X />
+						</IconAction>
 					)}
-					{item.dir && (
-						<RowAction label="Open terminal" onClick={act(() => openTerminal(item.id))}>
-							<SquareTerminal />
-						</RowAction>
+					{item.port != null && status === 'running' && (
+						<IconAction label="Open in browser" onClick={act(() => openBrowser(item.id))}>
+							<ArrowUpRight />
+						</IconAction>
 					)}
 				</div>
 			</div>
@@ -278,52 +291,22 @@ export function ServiceRow({
 								Reveal
 							</Button>
 						)}
-						<Button
-							variant="destructive"
-							size="xs"
-							className="ml-auto"
-							onClick={(e) => {
-								e.stopPropagation();
-								if (confirm(`Delete ${item.name}?`)) {
-									void deleteItem(item.id).then(onChange);
-								}
-							}}
-						>
-							<Trash2 />
-							Delete
-						</Button>
+						{item.dir && (
+							<Button variant="outline" size="xs" onClick={act(() => openTerminal(item.id))}>
+								<SquareTerminal />
+								Terminal
+							</Button>
+						)}
+						{status === 'error' && (
+							<Button variant="outline" size="xs" onClick={act(() => markStopped(item.id))}>
+								<Square />
+								Mark stopped
+							</Button>
+						)}
 					</div>
 				</div>
 			</CollapsibleContent>
 			</Collapsible>
 		</div>
-	);
-}
-
-/** Small icon button used for row actions, wrapped in a tooltip. */
-function RowAction({
-	label,
-	onClick,
-	children,
-}: {
-	label: string;
-	onClick: (e: React.MouseEvent) => void;
-	children: React.ReactNode;
-}): React.JSX.Element {
-	return (
-		<Tooltip>
-			<TooltipTrigger asChild>
-				<Button
-					variant="ghost"
-					size="icon-xs"
-					onClick={onClick}
-					aria-label={label}
-					className="text-muted-foreground hover:text-foreground focus-visible:opacity-100"
-				>
-					{children}
-				</Button>
-			</TooltipTrigger>
-			<TooltipContent>{label}</TooltipContent>
-		</Tooltip>
 	);
 }

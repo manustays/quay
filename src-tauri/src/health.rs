@@ -64,6 +64,27 @@ pub fn aggregate_status(statuses: impl Iterator<Item = Status>) -> Option<Status
 	any_starting.then_some(Status::Starting)
 }
 
+/// Last `n` lines of a file, reading at most the trailing 64 KiB so a
+/// multi-GB log is never slurped whole. Empty string when the file is
+/// missing or unreadable. Shared by [`exit_error`] and the `tail_log` command.
+pub fn tail_lines(path: &std::path::Path, n: usize) -> String {
+	use std::io::{Read, Seek, SeekFrom};
+	// ponytail: 64 KiB cap — plenty for any on-screen tail; no rotation handling
+	const CAP: u64 = 64 * 1024;
+	let Ok(mut file) = std::fs::File::open(path) else { return String::new() };
+	let len = file.metadata().map(|m| m.len()).unwrap_or(0);
+	if len > CAP {
+		let _ = file.seek(SeekFrom::End(-(CAP as i64)));
+	}
+	let mut bytes = Vec::new();
+	if file.read_to_end(&mut bytes).is_err() {
+		return String::new();
+	}
+	let text = String::from_utf8_lossy(&bytes);
+	let tail: Vec<&str> = text.lines().rev().take(n).collect();
+	tail.into_iter().rev().collect::<Vec<_>>().join("\n")
+}
+
 /// Build the error message for an exited process: the exit code when known
 /// (owned children; signal deaths and adopted PIDs have none) plus the last
 /// few log lines so the cause is visible without opening the log.
@@ -72,12 +93,9 @@ pub fn exit_error(exit_code: Option<i32>, log_path: &std::path::Path) -> String 
 		Some(code) => format!("process exited with code {code}"),
 		None => "process exited".to_string(),
 	};
-	if let Ok(text) = std::fs::read_to_string(log_path) {
-		let tail: Vec<&str> = text.lines().rev().take(3).collect();
-		if !tail.is_empty() {
-			let tail = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
-			msg = format!("{msg}\n{tail}");
-		}
+	let tail = tail_lines(log_path, 3);
+	if !tail.is_empty() {
+		msg = format!("{msg}\n{tail}");
 	}
 	msg
 }
@@ -164,10 +182,12 @@ pub fn poll_once(app: &AppHandle) {
 					match probed {
 						None => Status::Stopped,
 						Some((alive, exit_code)) => {
-							if !alive {
-								let log_path = state.dir.join("logs").join(format!("{}.log", item.id));
-								state.errors.lock().unwrap()
-									.insert(item.id.clone(), exit_error(exit_code, &log_path));
+							// Build the message once, on the alive→dead transition (the dead
+							// entry stays in `running` and would otherwise re-read the log
+							// every tick), and do the file read outside the errors lock.
+							if !alive && !state.errors.lock().unwrap().contains_key(&item.id) {
+								let msg = exit_error(exit_code, &state.log_path(&item.id));
+								state.errors.lock().unwrap().insert(item.id.clone(), msg);
 							}
 							let has_port = item.port.is_some();
 							// Port/HTTP checks happen outside any lock (can block up to 500 ms).
@@ -262,6 +282,21 @@ mod tests {
 		assert!(!msg.contains("one"));
 		// Unknown code + missing log → the bare message.
 		assert_eq!(exit_error(None, &dir.join("missing.log")), "process exited");
+		std::fs::remove_dir_all(&dir).ok();
+	}
+
+	#[test]
+	fn tail_lines_reads_only_the_end_of_huge_files() {
+		let dir = std::env::temp_dir().join(format!("msm-ht-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let log = dir.join("big.log");
+		// ~200 KiB of noise, well past the 64 KiB cap, then a final marker line.
+		let mut text = "noise line\n".repeat(20_000);
+		text.push_str("last-marker\n");
+		std::fs::write(&log, &text).unwrap();
+		let tail = tail_lines(&log, 2);
+		assert!(tail.ends_with("last-marker"));
+		assert_eq!(tail.lines().count(), 2);
 		std::fs::remove_dir_all(&dir).ok();
 	}
 

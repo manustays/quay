@@ -67,7 +67,7 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 	let state = app.state::<AppState>();
 
 	// Snapshot everything we need under locks, then release before blocking I/O
-	// (lsof in `pids_listening`, the 200 ms CPU sample) happens lock-free.
+	// (the `listeners` lsof scan, the 200 ms CPU sample) happens lock-free.
 	let items = state.config.lock().unwrap().items.clone();
 	let statuses = state.statuses.lock().unwrap().clone();
 	let tracked: HashMap<String, u32> = state
@@ -87,7 +87,14 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 	});
 	let brew_pids = if want_brew { brew::service_pids() } else { HashMap::new() };
 
-	// Resolve root PIDs per item. A port is resolved at most once per pass.
+	// One lsof snapshot per pass covers every item's port (each port filtered
+	// out of it), instead of a separate lsof per port.
+	let want_ports = items.iter().any(|i| {
+		i.port.is_some()
+			&& !matches!(i.kind, ItemKind::Docker)
+			&& matches!(statuses.get(&i.id), Some(Status::Running | Status::Starting))
+	});
+	let listeners = if want_ports { supervisor::listeners() } else { Vec::new() };
 	let mut port_cache: HashMap<u16, Vec<u32>> = HashMap::new();
 	let mut item_roots: Vec<(String, Vec<u32>)> = Vec::new();
 	for item in &items {
@@ -115,7 +122,7 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 		if let Some(port) = item.port {
 			let pids = port_cache
 				.entry(port)
-				.or_insert_with(|| supervisor::pids_listening(port));
+				.or_insert_with(|| supervisor::pids_for_port(&listeners, port));
 			roots.extend(pids.iter().copied());
 		}
 		roots.sort_unstable();
@@ -136,22 +143,27 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 
 		let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
 		let mut samples: HashMap<u32, (f32, u64)> = HashMap::new();
-		let mut uptimes: HashMap<u32, u64> = HashMap::new();
 		for (pid, proc_) in sys.processes() {
 			let pid_u = pid.as_u32();
 			samples.insert(pid_u, (proc_.cpu_usage(), proc_.memory()));
-			uptimes.insert(pid_u, proc_.run_time());
 			if let Some(parent) = proc_.parent() {
 				children.entry(parent.as_u32()).or_default().push(pid_u);
 			}
 		}
 
+		let run_time =
+			|p: &u32| sys.process(sysinfo::Pid::from_u32(*p)).map(|pr| pr.run_time());
 		item_roots
 			.into_iter()
 			.map(|(id, roots)| {
 				let (cpu_percent, memory_bytes) = aggregate_tree(&roots, &children, &samples);
-				// Roots are sorted ascending, so the first is the oldest/launcher PID.
-				let uptime_sec = roots.first().and_then(|p| uptimes.get(p).copied());
+				// Uptime of the tracked launcher PID when we have one; otherwise the
+				// oldest root by actual run time — numeric PID order says nothing
+				// about age (PID recycling, foreign listeners on the item's port).
+				let uptime_sec = tracked
+					.get(&id)
+					.and_then(run_time)
+					.or_else(|| roots.iter().filter_map(run_time).max());
 				ItemMetrics { id, cpu_percent, memory_bytes, uptime_sec }
 			})
 			.collect()

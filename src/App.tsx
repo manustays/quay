@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { detectFolder, getItems, getStatuses, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
-import type { DiscoveredPort, ItemMetrics, ManagedItem, Status } from './model';
+import { blankItem, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -50,26 +50,24 @@ export function App(): React.JSX.Element {
 	 */
 	const adopt = useCallback(async (entry: DiscoveredPort) => {
 		const detected = entry.cwd ? await detectFolder(entry.cwd).catch(() => null) : null;
+		// blankItem() carries the empty id that marks an add-mode draft.
 		setEditing({
-			id: '', // '' = add-mode draft; the backend assigns a uuid on save
+			...blankItem(),
 			name: detected?.name ?? entry.name,
-			kind: 'project',
 			dir: entry.cwd,
 			startCmd: detected?.startCmd ?? entry.command,
-			stopCmd: null,
 			port: entry.port,
-			runMode: 'background',
-			brewFormula: null,
-			dockerImage: null,
-			containerName: null,
 			stack: detected?.stack ?? entry.stack,
-			group: null,
-			order: 0,
-			favorite: false,
-			env: {},
-			healthPath: null,
-			autoStart: false,
 		});
+	}, []);
+
+	/**
+	 * Optimistically drop a discovered port's rows after a successful kill or
+	 * ignore — the next radar snapshot (≤5 s away) is the source of truth and
+	 * restores anything actually still listening.
+	 */
+	const dismissDiscovered = useCallback((entry: DiscoveredPort) => {
+		setDiscovered((prev) => prev.filter((d) => d.port !== entry.port));
 	}, []);
 
 	useEffect(() => {
@@ -131,6 +129,12 @@ export function App(): React.JSX.Element {
 		};
 	}, [refresh]);
 
+	// Recomputed only when items change, not on every metrics/radar tick.
+	const groups = useMemo(
+		() => Array.from(new Set(items.map((i) => i.group).filter((g): g is string => !!g))),
+		[items],
+	);
+
 	return (
 		<TooltipProvider delayDuration={300}>
 			<Popup
@@ -143,12 +147,13 @@ export function App(): React.JSX.Element {
 				onAdd={() => setEditing(null)}
 				onEdit={(item) => setEditing(item)}
 				onAdopt={(entry) => void adopt(entry)}
+				onDismissDiscovered={dismissDiscovered}
 				onSettings={() => setSettingsOpen(true)}
 			/>
 			<ServiceForm
 				open={editing !== undefined}
 				item={editing ?? null}
-				groups={Array.from(new Set(items.map((i) => i.group).filter((g): g is string => !!g)))}
+				groups={groups}
 				onOpenChange={(open) => { if (!open) setEditing(undefined); }}
 				onSaved={refresh}
 			/>

@@ -24,3 +24,10 @@ pub struct AppState {
 	/// runs (duplicate dialogs, racing downloads). See `lib.rs::check_for_updates`.
 	pub update_in_flight: AtomicBool,
 }
+
+impl AppState {
+	/// Path of the item's log file — the single source of the log layout.
+	pub fn log_path(&self, id: &str) -> PathBuf {
+		self.dir.join("logs").join(format!("{id}.log"))
+	}
+}

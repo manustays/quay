@@ -182,6 +182,7 @@ pub fn run() {
 			commands::get_statuses,
 			commands::start_item,
 			commands::stop_item,
+			commands::mark_stopped,
 			commands::stop_all,
 			commands::open_browser,
 			commands::open_terminal,
@@ -225,8 +226,7 @@ pub fn run() {
 						None => true, // portless: best-effort liveness only
 					};
 					if !identity_ok { continue; }
-					let log_path = st.dir.join("logs").join(format!("{id}.log"));
-					st.running.lock().unwrap().insert(id.clone(), supervisor::adopt(*pid, log_path));
+					st.running.lock().unwrap().insert(id.clone(), supervisor::adopt(*pid, st.log_path(id)));
 					commands::set_status(&app_handle, id, model::Status::Running);
 				}
 

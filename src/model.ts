@@ -62,6 +62,8 @@ export interface DiscoveredPort {
 	command: string;
 	cwd: string | null;
 	stack: string | null;
+	/** False for listeners that must not be adopted (e.g. Docker Desktop port proxies). */
+	adoptable: boolean;
 	managedItemId: string | null;
 }
 
@@ -96,6 +98,34 @@ export interface DetectResult {
 	port: number | null;
 	/** Detected tech stack keyword (e.g. "vite", "django"), if recognizable. */
 	stack: string | null;
+}
+
+/**
+ * A blank ManagedItem for add-mode drafts — the add form and the
+ * adopt-from-radar prefill both spread over this so every new field has
+ * exactly one home. An empty `id` marks the draft as not-yet-saved.
+ */
+export function blankItem(): ManagedItem {
+	return {
+		id: '',
+		name: '',
+		kind: 'project',
+		dir: null,
+		startCmd: null,
+		stopCmd: null,
+		port: null,
+		runMode: 'background',
+		brewFormula: null,
+		dockerImage: null,
+		containerName: null,
+		stack: null,
+		group: null,
+		order: 0,
+		favorite: false,
+		env: {},
+		healthPath: null,
+		autoStart: false,
+	};
 }
 
 /**

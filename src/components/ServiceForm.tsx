@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { Trash2 } from 'lucide-react';
 import { open as openDialog } from '@tauri-apps/plugin-dialog';
 import { Button } from '@/components/ui/button';
 import {
@@ -19,9 +20,10 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from '@/components/ui/select';
-import type { ItemKind, ManagedItem, RunMode } from '../model';
+import { blankItem, type ItemKind, type ManagedItem, type RunMode } from '../model';
 import {
 	addItem,
+	deleteItem,
 	detectFolder,
 	listBrewFormulae,
 	listDockerImages,
@@ -41,33 +43,9 @@ interface ServiceFormProps {
 	onSaved: () => void;
 }
 
-/** A blank item for the add-new flow. */
-function blank(): ManagedItem {
-	return {
-		id: '',
-		name: '',
-		kind: 'project',
-		dir: null,
-		startCmd: null,
-		stopCmd: null,
-		port: null,
-		runMode: 'background',
-		brewFormula: null,
-		dockerImage: null,
-		containerName: null,
-		stack: null,
-		group: null,
-		order: 0,
-		favorite: false,
-		env: {},
-		healthPath: null,
-		autoStart: false,
-	};
-}
-
 /** Add/edit dialog. Ports the original form.ts flow into a controlled React form. */
 export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: ServiceFormProps): React.JSX.Element {
-	const [data, setData] = useState<ManagedItem>(blank);
+	const [data, setData] = useState<ManagedItem>(blankItem);
 	const [envText, setEnvText] = useState('');
 	const [portText, setPortText] = useState('');
 	const [formulae, setFormulae] = useState<string[]>([]);
@@ -79,7 +57,7 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 	// Reset all fields whenever the dialog opens (for a fresh item or an edit).
 	useEffect(() => {
 		if (!open) return;
-		const d = item ? { ...item } : blank();
+		const d = item ? { ...item } : blankItem();
 		setData(d);
 		setEnvText(envToText(d.env));
 		setPortText(d.port != null ? String(d.port) : '');
@@ -315,7 +293,27 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 					<ToggleRow label="Auto-start on launch" checked={data.autoStart} onChange={(v) => set({ autoStart: v })} />
 				</div>
 
-				<DialogFooter>
+				<DialogFooter className="flex-row items-center">
+					{isEdit && (
+						<Button
+							variant="destructive"
+							size="sm"
+							className="mr-auto"
+							onClick={async () => {
+								if (!confirm(`Delete ${data.name}?`)) return;
+								try {
+									await deleteItem(data.id);
+									onOpenChange(false);
+									onSaved();
+								} catch (e) {
+									alert(String(e));
+								}
+							}}
+						>
+							<Trash2 />
+							Delete
+						</Button>
+					)}
 					<Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>Cancel</Button>
 					<Button size="sm" onClick={save}>Save</Button>
 				</DialogFooter>

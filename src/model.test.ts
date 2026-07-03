@@ -51,6 +51,7 @@ describe('model helpers', () => {
 		expect(ungrouped.map(i => i.id)).toEqual(['b']);
 	});
 	it('aggregateGroupMetrics sums cpu/mem, maxes uptime', () => {
+		/** Build an ItemMetrics fixture. */
 		const m = (id: string, cpu: number, mem: number, up: number | null) =>
 			({ id, cpuPercent: cpu, memoryBytes: mem, uptimeSec: up });
 		expect(aggregateGroupMetrics([])).toBeNull();

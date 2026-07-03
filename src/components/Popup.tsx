@@ -8,11 +8,13 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { aggregateGroupMetrics, aggregateGroupStatus, formatBytes, formatUptime, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { aggregateGroupMetrics, aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { cn } from '@/lib/utils';
+import { ensureDockerDaemon } from '@/lib/docker';
 import { reorder, startItem, stopAll, stopItem } from '../ipc';
 import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
+import { IconAction, MetricsText } from './RowBits';
 import { ServiceRow, STATUS_ACCENT } from './ServiceRow';
 
 interface PopupProps {
@@ -25,6 +27,8 @@ interface PopupProps {
 	onAdd: () => void;
 	onEdit: (item: ManagedItem) => void;
 	onAdopt: (entry: DiscoveredPort) => void;
+	/** Optimistically remove a discovered entry after a successful kill/ignore. */
+	onDismissDiscovered: (entry: DiscoveredPort) => void;
 	onSettings: () => void;
 }
 
@@ -39,6 +43,7 @@ export function Popup({
 	onAdd,
 	onEdit,
 	onAdopt,
+	onDismissDiscovered,
 	onSettings,
 }: PopupProps): React.JSX.Element {
 	const [query, setQuery] = useState('');
@@ -63,16 +68,16 @@ export function Popup({
 	// Reordering only makes sense on the full, unfiltered list.
 	const canReorder = query === '';
 
-	/** The independent drag lists, in the order their members are persisted. */
-	const dragLists = new Map<string, ManagedItem[]>([
-		...favParts.groups.map((g) => [`fav-grp:${g.name}`, g.items] as const),
-		['fav', favParts.ungrouped],
-		...groups.map((g) => [`grp:${g.name}`, g.items] as const),
-		['other', ungrouped],
-	]);
-
 	const handleDrop = (key: string, to: number) => {
 		if (drag && drag.group === key && drag.from !== to) {
+			// The independent drag lists, in the order their members are persisted.
+			// Built here (drop is a rare event) rather than every render.
+			const dragLists = new Map<string, ManagedItem[]>([
+				...favParts.groups.map((g) => [`fav-grp:${g.name}`, g.items] as const),
+				['fav', favParts.ungrouped],
+				...groups.map((g) => [`grp:${g.name}`, g.items] as const),
+				['other', ungrouped],
+			]);
 			// Move within one list, then persist the full flattened order
 			// (favorites, then each group cluster, then ungrouped).
 			const flat = [...dragLists.keys()].flatMap((k) => {
@@ -126,19 +131,33 @@ export function Popup({
 		}
 	};
 
-	/** Start every stopped/errored member; refresh when all have settled. */
-	const startGroup = (members: ManagedItem[]) =>
-		void Promise.allSettled(
-			members.filter((m) => statusOf(m) === 'stopped' || statusOf(m) === 'error')
-				.map((m) => startItem(m.id)),
-		).then(onChange);
+	/** Alert the reasons of any rejected results (settled actions stay silent otherwise). */
+	const surfaceFailures = (results: PromiseSettledResult<unknown>[]) => {
+		const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
+		if (failed.length > 0) alert(failed.map((f) => String(f.reason)).join('\n'));
+	};
 
-	/** Stop every running/starting member; refresh when all have settled. */
-	const stopGroup = (members: ManagedItem[]) =>
-		void Promise.allSettled(
-			members.filter((m) => statusOf(m) === 'running' || statusOf(m) === 'starting')
-				.map((m) => stopItem(m.id)),
-		).then(onChange);
+	/**
+	 * Start every stopped/errored member. Docker members get one shared daemon
+	 * check (prompt-then-start, matching single-row start); declining it skips
+	 * them rather than failing the whole group. Failures are surfaced, not
+	 * swallowed by allSettled.
+	 */
+	const startGroup = async (members: ManagedItem[]) => {
+		let targets = members.filter((m) => statusOf(m) === 'stopped' || statusOf(m) === 'error');
+		if (targets.some((m) => m.kind === 'docker') && !(await ensureDockerDaemon())) {
+			targets = targets.filter((m) => m.kind !== 'docker');
+		}
+		surfaceFailures(await Promise.allSettled(targets.map((m) => startItem(m.id))));
+		onChange();
+	};
+
+	/** Stop every running/starting member; failures are surfaced, then refresh. */
+	const stopGroup = async (members: ManagedItem[]) => {
+		const targets = members.filter((m) => statusOf(m) === 'running' || statusOf(m) === 'starting');
+		surfaceFailures(await Promise.allSettled(targets.map((m) => stopItem(m.id))));
+		onChange();
+	};
 
 	/** Render a section's group clusters followed by its ungrouped rows. */
 	const renderClusters = (
@@ -146,26 +165,36 @@ export function Popup({
 		keyPrefix: string,
 		ungroupedKey: string,
 		baseIndex: number,
-	) => (
-		<>
-			{parts.groups.map((g) => (
-				<GroupRow
-					key={g.name}
-					name={g.name}
-					count={g.items.length}
-					status={aggregateGroupStatus(g.items.map(statusOf))}
-					metrics={aggregateGroupMetrics(
-						g.items.map((m) => metrics.get(m.id)).filter((m): m is ItemMetrics => m != null),
-					)}
-					onStart={() => startGroup(g.items)}
-					onStop={() => stopGroup(g.items)}
-				>
-					{g.items.map((item, i) => renderRow(item, baseIndex + i, `${keyPrefix}${g.name}`, i))}
-				</GroupRow>
-			))}
-			{parts.ungrouped.map((item, i) => renderRow(item, baseIndex + i, ungroupedKey, i))}
-		</>
-	);
+	) => {
+		// Running offsets keep row indices contiguous across clusters so the
+		// entrance stagger cascades top-to-bottom instead of restarting per group.
+		const offsets: number[] = [];
+		let next = baseIndex;
+		for (const g of parts.groups) {
+			offsets.push(next);
+			next += g.items.length;
+		}
+		return (
+			<>
+				{parts.groups.map((g, gi) => (
+					<GroupRow
+						key={g.name}
+						name={g.name}
+						count={g.items.length}
+						status={aggregateGroupStatus(g.items.map(statusOf))}
+						metrics={aggregateGroupMetrics(
+							g.items.map((m) => metrics.get(m.id)).filter((m): m is ItemMetrics => m != null),
+						)}
+						onStart={() => void startGroup(g.items)}
+						onStop={() => void stopGroup(g.items)}
+					>
+						{g.items.map((item, i) => renderRow(item, offsets[gi] + i, `${keyPrefix}${g.name}`, i))}
+					</GroupRow>
+				))}
+				{parts.ungrouped.map((item, i) => renderRow(item, next + i, ungroupedKey, i))}
+			</>
+		);
+	};
 
 	const renderRow = (
 		item: ManagedItem,
@@ -278,6 +307,7 @@ export function Popup({
 									entry={entry}
 									onAdopt={onAdopt}
 									onChange={onChange}
+									onDismiss={onDismissDiscovered}
 								/>
 							))}
 						</CollapsibleContent>
@@ -357,44 +387,17 @@ function GroupRow({
 						</span>
 						<span className="flex items-center gap-1.5 font-mono text-[11px] leading-tight text-muted-foreground">
 							<span>{count} services</span>
-							{metrics && (
-								<span className="tabular-nums">
-									{metrics.cpuPercent.toFixed(0)}% · {formatBytes(metrics.memoryBytes)}
-									{metrics.uptimeSec != null && ` · ${formatUptime(metrics.uptimeSec)}`}
-								</span>
-							)}
+							{metrics && <MetricsText metrics={metrics} />}
 						</span>
 					</span>
 				</CollapsibleTrigger>
 				<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100 group-data-[state=open]:opacity-100">
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon-xs"
-								onClick={onStart}
-								aria-label={`Start all in ${name}`}
-								className="text-muted-foreground hover:text-foreground"
-							>
-								<Play />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>Start all</TooltipContent>
-					</Tooltip>
-					<Tooltip>
-						<TooltipTrigger asChild>
-							<Button
-								variant="ghost"
-								size="icon-xs"
-								onClick={onStop}
-								aria-label={`Stop all in ${name}`}
-								className="text-muted-foreground hover:text-destructive"
-							>
-								<Square />
-							</Button>
-						</TooltipTrigger>
-						<TooltipContent>Stop all</TooltipContent>
-					</Tooltip>
+					<IconAction label={`Start all in ${name}`} onClick={onStart}>
+						<Play />
+					</IconAction>
+					<IconAction label={`Stop all in ${name}`} onClick={onStop}>
+						<Square />
+					</IconAction>
 				</div>
 			</div>
 			<CollapsibleContent>

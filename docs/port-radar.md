@@ -9,7 +9,7 @@ The scan loop (`src-tauri/src/scanner.rs`) mirrors the metrics loop: it idles wh
 Each pass:
 
 1. **List listeners** — one `lsof -iTCP -sTCP:LISTEN -P -n -a -u <uid> -Fpn` call returns `(port, pid)` for every TCP listener owned by **your user**. Restricting to the current uid cuts system noise and avoids the Full Disk Access prompt entirely (foreign-user processes couldn't be resolved or signalled anyway).
-2. **Filter** — drops Quay's own pid, pids already tracked in the running map, ports < 1024, ports in `settings.ignoredPorts`, and a small denylist of well-known non-dev processes (`rapportd`, `ControlCenter`, `sharingd`, `Spotify`, `Dropbox`).
+2. **Filter** — drops Quay's own pid, pids already tracked in the running map **and their descendants** (the listener of a managed service is usually a child of the tracked shell wrapper — e.g. `zsh → npm → node` — and must never be offered a Kill button), ports < 1024, ports in `settings.ignoredPorts`, and a small denylist of well-known non-dev processes (`rapportd`, `ControlCenter`, `sharingd`, `Spotify`, `Dropbox`).
 3. **Resolve new pids** — a targeted `sysinfo` refresh reads each new pid's **argv** and **cwd** (no subprocess, no Full Disk Access for same-uid processes). Resolutions are cached per pid, so a steady set of listeners costs one `lsof` per pass and nothing else.
 4. **Identify** — display name is the cwd's folder name (falling back to the process name); the tech stack comes from `detect::stack_from_argv` (launcher fingerprints like `next dev`, `manage.py runserver`) or, failing that, `detect::stack_from_dir` manifest markers in the cwd.
 5. **Emit** — the full snapshot is pushed on the `ports_discovered` event; the frontend replaces its list wholesale (same contract as `metrics_changed`).
@@ -17,8 +17,9 @@ Each pass:
 ## Actions
 
 - **Adopt** — opens the add-service form prefilled with the listener's folder, command (manifest script when the folder is recognizable, shell-quoted argv otherwise), port, and stack. Saving creates a normal `project` item; pressing **Start** then attaches to the live listener via the existing `adopt_if_listening` path — the process is not restarted. Review the prefilled command before saving: argv is what the process was *started with*, which may not be the command you'd use to start it fresh.
-- **Kill** — SIGTERM (⌥-click: SIGKILL) the pid. The backend re-checks that the pid still owns the port immediately before signalling, so a stale row can't hit a reused pid. Only the pid is signalled, never its process group.
+- **Kill** — SIGTERM (⌥-click: SIGKILL) the pid. The backend re-checks that the pid still owns the port immediately before signalling, so a stale row can't hit a reused pid, and a failed signal (e.g. EPERM on a root-owned listener) is reported as an error rather than silently swallowed. Only the pid is signalled, never its process group.
 - **Ignore** — appends the port to `settings.ignoredPorts` (persisted). Ignored ports show as removable chips in Settings.
+- After a successful Kill/Ignore the row disappears immediately (optimistic removal); the next scan pass restores anything actually still listening.
 
 ## Port collisions
 

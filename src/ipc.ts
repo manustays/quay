@@ -17,6 +17,8 @@ export const reorder = (ids: string[]) => invoke<void>('reorder', { ids });
 export const toggleFavorite = (id: string) => invoke<void>('toggle_favorite', { id });
 export const startItem = (id: string) => invoke<void>('start_item', { id });
 export const stopItem = (id: string) => invoke<void>('stop_item', { id });
+/** Mark a crashed/killed item as normally stopped — no signal, no port kill. */
+export const markStopped = (id: string) => invoke<void>('mark_stopped', { id });
 export const stopAll = () => invoke<void>('stop_all');
 export const openBrowser = (id: string) => invoke<void>('open_browser', { id });
 export const openTerminal = (id: string) => invoke<void>('open_terminal', { id });

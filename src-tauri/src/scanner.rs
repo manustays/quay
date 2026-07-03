@@ -11,7 +11,6 @@ use crate::state::AppState;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
@@ -28,6 +27,10 @@ pub struct DiscoveredPort {
 	pub command: String,
 	pub cwd: Option<String>,
 	pub stack: Option<String>,
+	/// False for listeners that must not be adopted as project services
+	/// (currently Docker Desktop's port proxies — manage those via a
+	/// Docker-kind service instead).
+	pub adoptable: bool,
 	/// Set when the port belongs to a registered item (collision indicator);
 	/// such entries are badges on existing rows, not adoptable listeners.
 	#[serde(rename = "managedItemId")]
@@ -42,6 +45,7 @@ struct Resolved {
 	command: String,
 	cwd: Option<String>,
 	stack: Option<String>,
+	adoptable: bool,
 }
 
 /// Well-known non-dev listeners hidden from the radar. Matched as a
@@ -49,71 +53,68 @@ struct Resolved {
 // ponytail: static denylist; a settings toggle only if noise reports come in
 const NAME_DENYLIST: &[&str] = &["rapportd", "controlcenter", "sharingd", "spotify", "dropbox"];
 
-/// Parse `lsof -Fpn` field output into unique `(port, pid)` pairs. Pure.
-///
-/// The format is one field per line: `p<pid>` starts a process section, each
-/// `n<addr>` names a socket (e.g. `n*:3000`, `n127.0.0.1:5173`, `n[::1]:8080`).
-/// The port is whatever follows the last `:`. Garbage lines are skipped.
-pub fn parse_lsof_fields(out: &str) -> Vec<(u16, u32)> {
-	let mut pairs: Vec<(u16, u32)> = Vec::new();
-	let mut seen: HashSet<(u16, u32)> = HashSet::new();
-	let mut pid: Option<u32> = None;
-	for line in out.lines() {
-		match line.as_bytes().first() {
-			Some(b'p') => pid = line[1..].trim().parse().ok(),
-			Some(b'n') => {
-				let Some(pid) = pid else { continue };
-				let Some(port) = line.rsplit(':').next().and_then(|p| p.trim().parse().ok())
-				else {
-					continue;
-				};
-				if seen.insert((port, pid)) {
-					pairs.push((port, pid));
-				}
-			}
-			_ => {}
-		}
-	}
-	pairs
-}
-
-/// All `(port, pid)` TCP listeners owned by the current user, via one `lsof`.
-///
-/// `-u <uid>` restricts to our own processes — foreign-user listeners can't be
-/// resolved (cwd/argv) or signalled anyway, and skipping them avoids the
-/// Full Disk Access prompt entirely. Empty when `lsof` is missing or fails.
-pub fn scan_listeners() -> Vec<(u16, u32)> {
-	let uid = unsafe { libc::getuid() }.to_string();
-	let Ok(out) = Command::new("lsof")
-		.args(["-iTCP", "-sTCP:LISTEN", "-P", "-n", "-a", "-u", &uid, "-Fpn"])
-		.output()
-	else {
-		return vec![];
-	};
-	parse_lsof_fields(&String::from_utf8_lossy(&out.stdout))
-}
-
-/// Join argv into a shell-pasteable command, quoting elements with spaces.
+/// Join argv into a shell-pasteable command. An element stays bare only when
+/// every character is from a known-safe set; anything else (spaces, quotes,
+/// `$`, `;`, backticks, …) is single-quoted, with embedded single quotes
+/// escaped as `'\''` — so an apostrophe in a path can't unbalance the command.
 fn shell_join(argv: &[String]) -> String {
+	fn is_safe(a: &str) -> bool {
+		!a.is_empty()
+			&& a.chars().all(|c| c.is_ascii_alphanumeric() || "_-./:=@%+,".contains(c))
+	}
 	argv.iter()
 		.map(|a| {
-			if a.contains(' ') || a.contains('"') {
-				format!("'{}'", a.replace('\'', r"'\''"))
-			} else {
+			if is_safe(a) {
 				a.clone()
+			} else {
+				format!("'{}'", a.replace('\'', r"'\''"))
 			}
 		})
 		.collect::<Vec<_>>()
 		.join(" ")
 }
 
+/// True when `pid`'s parent chain reaches a tracked (managed) root PID.
+///
+/// A managed service usually listens via a *descendant* of the PID we track
+/// (`zsh -lc` wrapper → `npm` → `node`), so exact-PID exclusion isn't enough.
+/// Parents are refreshed into `sys` on demand, one hop at a time; the walk is
+/// capped so a pathological parent cycle can't spin.
+fn has_tracked_ancestor(sys: &mut System, pid: u32, tracked: &HashSet<u32>) -> bool {
+	if tracked.is_empty() {
+		return false;
+	}
+	let mut cur = pid;
+	for _ in 0..16 {
+		let sys_pid = Pid::from_u32(cur);
+		if sys.process(sys_pid).is_none() {
+			sys.refresh_processes_specifics(
+				ProcessesToUpdate::Some(&[sys_pid]),
+				true,
+				ProcessRefreshKind::nothing(),
+			);
+		}
+		let Some(ppid) = sys.process(sys_pid).and_then(|p| p.parent()).map(|p| p.as_u32())
+		else {
+			return false;
+		};
+		if tracked.contains(&ppid) {
+			return true;
+		}
+		if ppid <= 1 {
+			return false;
+		}
+		cur = ppid;
+	}
+	false
+}
+
 /// Resolve argv/cwd/stack for `pids` with one targeted `sysinfo` refresh.
-fn resolve(pids: &[u32]) -> HashMap<u32, Resolved> {
+fn resolve(sys: &mut System, pids: &[u32]) -> HashMap<u32, Resolved> {
 	if pids.is_empty() {
 		return HashMap::new();
 	}
 	let sys_pids: Vec<Pid> = pids.iter().map(|&p| Pid::from_u32(p)).collect();
-	let mut sys = System::new();
 	sys.refresh_processes_specifics(
 		ProcessesToUpdate::Some(&sys_pids),
 		true,
@@ -147,7 +148,7 @@ fn resolve(pids: &[u32]) -> HashMap<u32, Resolved> {
 		};
 		out.insert(
 			pid,
-			Resolved { name, command: shell_join(&argv), cwd, stack },
+			Resolved { name, command: shell_join(&argv), cwd, stack, adoptable: !is_docker_proxy },
 		);
 	}
 	out
@@ -156,7 +157,7 @@ fn resolve(pids: &[u32]) -> HashMap<u32, Resolved> {
 /// One scan pass: list listeners, filter, resolve new PIDs via `cache`, and
 /// return the snapshot to emit.
 fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPort> {
-	let listeners = scan_listeners();
+	let listeners = crate::supervisor::listeners();
 
 	// Snapshot config/state under short locks before any resolution work.
 	let (managed_ports, ignored_ports, tracked_pids) = {
@@ -174,6 +175,8 @@ fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPo
 	};
 	let own_pid = std::process::id();
 
+	// One System shared by the ancestor walks and the argv/cwd resolution.
+	let mut sys = System::new();
 	let candidates: Vec<(u16, u32)> = listeners
 		.into_iter()
 		.filter(|&(port, pid)| {
@@ -182,6 +185,10 @@ fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPo
 				&& port >= 1024
 				&& !ignored_ports.contains(&port)
 		})
+		// Drop descendants of tracked PIDs: they are our own managed services
+		// (the listener is usually a child of the tracked shell wrapper), and
+		// offering a Kill button for them invites self-inflicted outages.
+		.filter(|&(_, pid)| !has_tracked_ancestor(&mut sys, pid, &tracked_pids))
 		.collect();
 
 	// Resolve only PIDs we haven't seen; evict cache entries for gone PIDs.
@@ -189,7 +196,7 @@ fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPo
 	cache.retain(|pid, _| live.contains(pid));
 	let new_pids: Vec<u32> =
 		live.iter().copied().filter(|pid| !cache.contains_key(pid)).collect();
-	cache.extend(resolve(&new_pids));
+	cache.extend(resolve(&mut sys, &new_pids));
 
 	let mut out: Vec<DiscoveredPort> = candidates
 		.into_iter()
@@ -206,6 +213,7 @@ fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPo
 				command: r.command.clone(),
 				cwd: r.cwd.clone(),
 				stack: r.stack.clone(),
+				adoptable: r.adoptable,
 				managed_item_id: managed_ports.get(&port).cloned(),
 			})
 		})
@@ -240,27 +248,25 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn parse_lsof_fields_handles_addr_shapes() {
-		let out = "p123\nn*:3000\nn127.0.0.1:5173\np456\nn[::1]:8080\nn[::]:8080\n";
-		assert_eq!(
-			parse_lsof_fields(out),
-			vec![(3000, 123), (5173, 123), (8080, 456)]
-		);
-	}
-
-	#[test]
-	fn parse_lsof_fields_dedupes_and_skips_garbage() {
-		// v4+v6 listeners on the same port dedupe to one pair; f-lines, blank
-		// lines, a port-less name, and an n-line before any p-line are skipped.
-		let out = "nno-pid-yet:99\np12\nf34\nnlocalhost:3000\nn[::1]:3000\n\nnbadport:\n";
-		assert_eq!(parse_lsof_fields(out), vec![(3000, 12)]);
-		assert_eq!(parse_lsof_fields(""), Vec::<(u16, u32)>::new());
-	}
-
-	#[test]
 	fn shell_join_quotes_spaces() {
 		let argv = vec!["node".to_string(), "my server.js".to_string()];
 		assert_eq!(shell_join(&argv), "node 'my server.js'");
 		assert_eq!(shell_join(&["vite".to_string()]), "vite");
+	}
+
+	#[test]
+	fn shell_join_quotes_metachars_and_apostrophes() {
+		// An apostrophe (no spaces) must still be quoted, and quoted balanced.
+		assert_eq!(
+			shell_join(&["node".to_string(), "/u/bob's-app/server.js".to_string()]),
+			r"node '/u/bob'\''s-app/server.js'"
+		);
+		// Shell metacharacters can't pass through bare.
+		assert_eq!(shell_join(&["echo".to_string(), "$HOME;ls".to_string()]), "echo '$HOME;ls'");
+		// Plain paths and flags stay readable.
+		assert_eq!(
+			shell_join(&["/usr/bin/python3".to_string(), "-m".to_string(), "http.server".to_string()]),
+			"/usr/bin/python3 -m http.server"
+		);
 	}
 }

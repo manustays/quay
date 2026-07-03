@@ -13,19 +13,25 @@ pub struct DetectResult {
 	pub stack: Option<String>,
 }
 
+/// Read and parse a folder's `package.json`, if present and valid.
+fn read_package_json(dir: &Path) -> Option<serde_json::Value> {
+	let text = std::fs::read_to_string(dir.join("package.json")).ok()?;
+	serde_json::from_str(&text).ok()
+}
+
 /// Inspect a folder and suggest name/kind/start command/port/stack.
 pub fn detect_folder(path: &Path) -> DetectResult {
 	let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("service").to_string();
+	// Parse package.json once and reuse it for both the start command and the
+	// stack detection below (stack_from_dir would otherwise re-read/re-parse it).
+	let pkg = read_package_json(path);
 	let mut start_cmd = None;
-	let pkg = path.join("package.json");
-	if pkg.exists() {
-		if let Ok(text) = std::fs::read_to_string(&pkg) {
-			if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-				for script in ["dev", "start", "serve"] {
-					if v.get("scripts").and_then(|s| s.get(script)).is_some() {
-						start_cmd = Some(format!("npm run {script}"));
-						break;
-					}
+	if pkg.is_some() {
+		if let Some(v) = &pkg {
+			for script in ["dev", "start", "serve"] {
+				if v.get("scripts").and_then(|s| s.get(script)).is_some() {
+					start_cmd = Some(format!("npm run {script}"));
+					break;
 				}
 			}
 		}
@@ -34,7 +40,7 @@ pub fn detect_folder(path: &Path) -> DetectResult {
 		start_cmd = Some("python main.py".into());
 	}
 	let port = read_env_port(&path.join(".env"));
-	let stack = stack_from_dir(path).map(str::to_string);
+	let stack = stack_from_dir_with(path, pkg.as_ref()).map(str::to_string);
 	DetectResult { name, kind: ItemKind::Project, start_cmd, port, stack }
 }
 
@@ -87,25 +93,33 @@ pub fn stack_from_argv(argv: &[String]) -> Option<&'static str> {
 /// Framework-specific markers win over generic runtimes (a Vite React app is
 /// "vite", not "react"; a Django repo is "django", not "python").
 pub fn stack_from_dir(dir: &Path) -> Option<&'static str> {
-	if let Ok(text) = std::fs::read_to_string(dir.join("package.json")) {
-		if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-			let has_dep = |name: &str| {
-				["dependencies", "devDependencies"]
-					.iter()
-					.any(|k| v.get(k).and_then(|d| d.get(name)).is_some())
-			};
-			for (stack, dep) in [
-				("next", "next"),
-				("nuxt", "nuxt"),
-				("remix", "@remix-run/react"),
-				("astro", "astro"),
-				("vite", "vite"),
-				("react", "react"),
-			] {
-				if has_dep(dep) { return Some(stack); }
-			}
-			return Some("node");
+	stack_from_dir_with(dir, read_package_json(dir).as_ref())
+}
+
+/// [`stack_from_dir`] with an already-parsed `package.json` (or `None`), so a
+/// caller that also needs the manifest doesn't read and parse it twice.
+fn stack_from_dir_with(dir: &Path, pkg: Option<&serde_json::Value>) -> Option<&'static str> {
+	// Generic runtime fallbacks ("node", "python") are deferred to the end:
+	// a Rails/Django/Go repo often carries a package.json for its JS tooling
+	// (jsbundling, Tailwind) and must not be mislabeled by it.
+	let mut fallback: Option<&'static str> = None;
+	if let Some(v) = pkg {
+		let has_dep = |name: &str| {
+			["dependencies", "devDependencies"]
+				.iter()
+				.any(|k| v.get(k).and_then(|d| d.get(name)).is_some())
+		};
+		for (stack, dep) in [
+			("next", "next"),
+			("nuxt", "nuxt"),
+			("remix", "@remix-run/react"),
+			("astro", "astro"),
+			("vite", "vite"),
+			("react", "react"),
+		] {
+			if has_dep(dep) { return Some(stack); }
 		}
+		fallback = Some("node");
 	}
 	if dir.join("manage.py").exists() { return Some("django"); }
 	for manifest in ["pyproject.toml", "requirements.txt"] {
@@ -114,7 +128,7 @@ pub fn stack_from_dir(dir: &Path) -> Option<&'static str> {
 			for stack in ["django", "flask", "fastapi"] {
 				if lower.contains(stack) { return Some(stack); }
 			}
-			return Some("python");
+			fallback = fallback.or(Some("python"));
 		}
 	}
 	if dir.join("Gemfile").exists() { return Some("rails"); }
@@ -123,7 +137,7 @@ pub fn stack_from_dir(dir: &Path) -> Option<&'static str> {
 	if let Ok(text) = std::fs::read_to_string(dir.join("composer.json")) {
 		return Some(if text.contains("laravel/framework") { "laravel" } else { "php" });
 	}
-	None
+	fallback
 }
 
 /// Parse a `PORT=NNNN` line from a .env file, if present.
@@ -177,6 +191,7 @@ mod tests {
 		std::fs::remove_dir_all(&d).ok();
 	}
 
+	/// Build an owned argv from string literals.
 	fn argv(parts: &[&str]) -> Vec<String> {
 		parts.iter().map(|s| s.to_string()).collect()
 	}
@@ -209,6 +224,19 @@ mod tests {
 			r#"{"dependencies":{"react":"18"},"devDependencies":{"vite":"5"}}"#,
 		).unwrap();
 		assert_eq!(stack_from_dir(&d), Some("vite"));
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn stack_from_dir_prefers_backend_manifest_over_tooling_package_json() {
+		let d = tmp();
+		// A Rails repo with a JS-tooling package.json (no framework deps) is rails.
+		std::fs::write(d.join("package.json"), r#"{"devDependencies":{"esbuild":"0.20"}}"#).unwrap();
+		std::fs::write(d.join("Gemfile"), "gem 'rails'\n").unwrap();
+		assert_eq!(stack_from_dir(&d), Some("rails"));
+		// Without a backend manifest the same package.json falls back to node.
+		std::fs::remove_file(d.join("Gemfile")).unwrap();
+		assert_eq!(stack_from_dir(&d), Some("node"));
 		std::fs::remove_dir_all(&d).ok();
 	}
 

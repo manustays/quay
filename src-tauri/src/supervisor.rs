@@ -164,32 +164,67 @@ pub fn exit_code(running: &mut Running) -> Option<i32> {
 	running.child.as_mut()?.try_wait().ok().flatten()?.code()
 }
 
-/// Parse `lsof -t` output (one PID per line) into a sorted, de-duplicated list.
+/// Parse `lsof -Fpn` field output into unique `(port, pid)` pairs. Pure.
 ///
-/// Tolerates blank lines and non-numeric garbage. Sorting makes PID selection
-/// deterministic when a port has multiple listeners (e.g. IPv4 + IPv6).
-pub fn parse_lsof_pids(out: &str) -> Vec<u32> {
-	let mut pids: Vec<u32> = out
-		.lines()
-		.filter_map(|l| l.trim().parse::<u32>().ok())
-		.collect();
-	pids.sort_unstable();
-	pids.dedup();
-	pids
+/// The format is one field per line: `p<pid>` starts a process section, each
+/// `n<addr>` names a socket (e.g. `n*:3000`, `n127.0.0.1:5173`, `n[::1]:8080`).
+/// The port is whatever follows the last `:`. Garbage lines are skipped.
+pub fn parse_lsof_fields(out: &str) -> Vec<(u16, u32)> {
+	let mut pairs: Vec<(u16, u32)> = Vec::new();
+	let mut seen: std::collections::HashSet<(u16, u32)> = std::collections::HashSet::new();
+	let mut pid: Option<u32> = None;
+	for line in out.lines() {
+		match line.as_bytes().first() {
+			Some(b'p') => pid = line[1..].trim().parse().ok(),
+			Some(b'n') => {
+				let Some(pid) = pid else { continue };
+				let Some(port) = line.rsplit(':').next().and_then(|p| p.trim().parse().ok())
+				else {
+					continue;
+				};
+				if seen.insert((port, pid)) {
+					pairs.push((port, pid));
+				}
+			}
+			_ => {}
+		}
+	}
+	pairs
 }
 
-/// PIDs of processes listening on `127.0.0.1:<port>` (TCP), via `lsof`.
+/// All `(port, pid)` TCP listeners owned by the current user, via one `lsof`.
 ///
-/// Returns an empty vec if `lsof` is missing or fails — callers degrade to
-/// handle-only behavior.
-pub fn pids_listening(port: u16) -> Vec<u32> {
+/// The single lsof entry point shared by the port radar, metrics, adopt/stop,
+/// and launch reattach. `-u <uid>` restricts to our own processes — foreign-user
+/// listeners can't be resolved or signalled anyway, and skipping them avoids the
+/// Full Disk Access prompt entirely. Empty when `lsof` is missing or fails.
+pub fn listeners() -> Vec<(u16, u32)> {
+	let uid = unsafe { libc::getuid() }.to_string();
 	let Ok(out) = Command::new("lsof")
-		.args(["-ti", &format!("tcp:{port}"), "-sTCP:LISTEN"])
+		.args(["-iTCP", "-sTCP:LISTEN", "-P", "-n", "-a", "-u", &uid, "-Fpn"])
 		.output()
 	else {
 		return vec![];
 	};
-	parse_lsof_pids(&String::from_utf8_lossy(&out.stdout))
+	parse_lsof_fields(&String::from_utf8_lossy(&out.stdout))
+}
+
+/// PIDs of our own processes listening on `<port>` (TCP), sorted and deduped.
+///
+/// A filter over [`listeners`]; sorting makes PID selection deterministic when a
+/// port has multiple listeners (e.g. IPv4 + IPv6). Empty when `lsof` fails.
+pub fn pids_listening(port: u16) -> Vec<u32> {
+	pids_for_port(&listeners(), port)
+}
+
+/// PIDs listening on `port` within an existing `(port, pid)` snapshot, sorted
+/// and deduped — lets a caller reuse one [`listeners`] scan across many ports.
+pub fn pids_for_port(listeners: &[(u16, u32)], port: u16) -> Vec<u32> {
+	let mut pids: Vec<u32> =
+		listeners.iter().filter(|&&(p, _)| p == port).map(|&(_, pid)| pid).collect();
+	pids.sort_unstable();
+	pids.dedup();
+	pids
 }
 
 /// Best-effort: SIGTERM then (after 5 s) SIGKILL every PID listening on `port`.
@@ -245,11 +280,19 @@ mod tests {
 	}
 
 	#[test]
-	fn parse_lsof_pids_handles_blanks_and_garbage() {
-		assert_eq!(parse_lsof_pids("123\n456\n"), vec![123, 456]);
-		assert_eq!(parse_lsof_pids(""), Vec::<u32>::new());
-		// blank lines, whitespace, and non-numeric lines are ignored; sorted + deduped
-		assert_eq!(parse_lsof_pids("\n  789 \nnot-a-pid\n123\n123\n"), vec![123, 789]);
+	fn parse_lsof_fields_handles_addr_shapes_and_dedupes() {
+		let out = "p123\nn*:3000\nn127.0.0.1:5173\np456\nn[::1]:8080\nn[::]:8080\n";
+		assert_eq!(parse_lsof_fields(out), vec![(3000, 123), (5173, 123), (8080, 456)]);
+		// v4+v6 on one port dedupe; an n-line before any p-line and a port-less name skip.
+		assert_eq!(parse_lsof_fields("nno-pid:99\np12\nnlocalhost:3000\nn[::1]:3000\nnbad:\n"), vec![(3000, 12)]);
+		assert_eq!(parse_lsof_fields(""), Vec::<(u16, u32)>::new());
+	}
+
+	#[test]
+	fn pids_for_port_filters_sorts_dedupes() {
+		let snap = vec![(3000, 456), (3000, 123), (5173, 999), (3000, 123)];
+		assert_eq!(pids_for_port(&snap, 3000), vec![123, 456]);
+		assert_eq!(pids_for_port(&snap, 8080), Vec::<u32>::new());
 	}
 
 	#[test]

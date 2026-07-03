@@ -262,8 +262,7 @@ pub fn adopt_if_listening(app: &AppHandle, item: &ManagedItem) -> bool {
 	if !crate::health::port_open(p) { return false; }
 	let Some(pid) = supervisor::pids_listening(p).first().copied() else { return false; };
 	let state = app.state::<AppState>();
-	let log_path = state.dir.join("logs").join(format!("{}.log", item.id));
-	state.running.lock().unwrap().insert(item.id.clone(), supervisor::adopt(pid, log_path));
+	state.running.lock().unwrap().insert(item.id.clone(), supervisor::adopt(pid, state.log_path(&item.id)));
 	persist_pids(&state);
 	set_status(app, &item.id, Status::Running);
 	true
@@ -331,8 +330,7 @@ pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
 				// If the PID never lands (slow launch / write failure) we fall back to
 				// the pre-fix behavior — Running, untracked. No worse than before.
 				if let Some(pid) = read_pidfile(&pidfile) {
-					let log_path = logs.join(format!("{id}.log"));
-					state.running.lock().unwrap().insert(id.clone(), supervisor::adopt(pid, log_path));
+					state.running.lock().unwrap().insert(id.clone(), supervisor::adopt(pid, state.log_path(&id)));
 					persist_pids(&state);
 					let _ = std::fs::remove_file(&pidfile);
 				}
@@ -373,6 +371,25 @@ pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
 		let _ = std::fs::remove_file(state.dir.join("logs").join(format!("{id}.term.pid")));
 		persist_pids(&state);
 	}
+	set_status(&app, &id, Status::Stopped);
+	Ok(())
+}
+
+/// Mark a crashed/killed item as normally stopped **without signalling anything**.
+///
+/// For a service that died outside Quay (manual `kill`, crash), the dead entry
+/// lingers in `running` and every health poll re-derives `Status::Error` (red).
+/// Unlike `stop_item`, this sends no SIGTERM and never calls `stop_port` — the
+/// process is already gone, and the freed port may since have been rebound by an
+/// unrelated process we must not touch. It just drops the stale `running`/`errors`
+/// entries, persists pids, and sets `Stopped` so the poll treats it as idle.
+#[tauri::command]
+pub fn mark_stopped(app: AppHandle, id: String) -> Result<(), AppError> {
+	let state = app.state::<AppState>();
+	{ state.running.lock().unwrap().remove(&id); }
+	state.errors.lock().unwrap().remove(&id);
+	let _ = std::fs::remove_file(state.dir.join("logs").join(format!("{id}.term.pid")));
+	persist_pids(&state);
 	set_status(&app, &id, Status::Stopped);
 	Ok(())
 }
@@ -451,10 +468,7 @@ pub fn reveal_in_finder(app: AppHandle, id: String) -> Result<(), AppError> {
 #[tauri::command]
 pub fn tail_log(app: AppHandle, id: String, lines: usize) -> Result<String, AppError> {
 	let state = app.state::<AppState>();
-	let path = state.dir.join("logs").join(format!("{id}.log"));
-	let text = std::fs::read_to_string(&path).unwrap_or_default();
-	let tail: Vec<&str> = text.lines().rev().take(lines).collect();
-	Ok(tail.into_iter().rev().collect::<Vec<_>>().join("\n"))
+	Ok(crate::health::tail_lines(&state.log_path(&id), lines))
 }
 
 /// List installed terminal apps for the settings picker. Terminal.app is always
@@ -495,7 +509,12 @@ pub fn kill_discovered(pid: u32, port: u16, force: bool) -> Result<(), AppError>
 		return Err(AppError::Message(format!("process {pid} no longer listens on :{port}")));
 	}
 	let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
-	unsafe { libc::kill(pid as i32, sig) };
+	// A failed kill (EPERM on a root-owned listener, ESRCH on a just-exited PID)
+	// must surface — a silent Ok would tell the user the process was terminated.
+	if unsafe { libc::kill(pid as i32, sig) } != 0 {
+		let err = std::io::Error::last_os_error();
+		return Err(AppError::Message(format!("could not signal process {pid}: {err}")));
+	}
 	Ok(())
 }
 
