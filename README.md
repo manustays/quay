@@ -1,19 +1,16 @@
-<center>
-
-![Quay Logo](docs/assets/tray-starting.svg)
-
-# Quay
+<div align="center">
+<img src="docs/assets/tray-starting.svg" width="128" height="128" alt="Quay Logo" />
+<h1>Quay</h1>
 
 > **Quay** _(pronounced "key")_ — **Where your ports come in.**
 >
 > A native macOS menubar app to start, stop, and monitor your local dev services — Node/Python servers, Homebrew services, Docker containers, and long-running terminal agents — from one place, with live CPU/memory metrics.
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Platform: macOS](https://img.shields.io/badge/platform-macOS-black.svg)](#requirements)
-[![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://tauri.app)
-<a href="https://abhi.am" target="_blank">![About Abhishek](https://img.shields.io/badge/about-me-blue)</a>
-
-</center>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
+<a href="#requirements"><img src="https://img.shields.io/badge/platform-macOS-black.svg" alt="Platform: macOS" /></a>
+<a href="https://tauri.app"><img src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg" alt="Built with Tauri" /></a>
+<a href="https://abhi.am" target="_blank"><img src="https://img.shields.io/badge/about-me-blue" alt="About Abhishek" /></a>
+</div>
 
 
 ## The problem
@@ -22,11 +19,10 @@ If you build a lot of local services, you know the dance: remember which folder,
 
 **Quay** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…), Docker containers, and long-running terminal agents.
 
-<center>
+<div align="center">
+<img src="docs/assets/quay-desktop-1000.png" width="900" alt="Quay Popover Screenshot" />
+</div>
 
-![Quay Popover Screenshot](docs/assets/quay-desktop-screenshot-900.jpg)
-
-</center>
 
 ## Features
 
