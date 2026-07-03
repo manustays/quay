@@ -1,3 +1,12 @@
+# [0.11.0](https://github.com/manustays/quay/compare/v0.10.0...v0.11.0) (2026-07-03)
+
+
+### Features
+
+* implement dynamic resizing of popover based on content height ([aef5d00](https://github.com/manustays/quay/commit/aef5d00976510da3342be2a37e91ec24016757dd))
+* implement search functionality in popup and enhance service row expansion handling ([d3fa3d0](https://github.com/manustays/quay/commit/d3fa3d012ad786279232fc800117ce5d281bd09a))
+* update README with new images and layout enhancements ([aea9967](https://github.com/manustays/quay/commit/aea996757f2cd32c27ff17f5d1695343d1c71aa3))
+
 # [0.10.0](https://github.com/manustays/quay/compare/v0.9.0...v0.10.0) (2026-07-03)
 
 
