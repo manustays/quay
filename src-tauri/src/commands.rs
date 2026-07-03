@@ -317,7 +317,10 @@ pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
 					set_status(&app, &id, Status::Running);
 					return Ok(());
 				}
-				let dir = item.dir.clone().ok_or_else(|| AppError::Message("no dir".into()))?;
+				// A global CLI tool (e.g. `llmfit` on PATH) has no project folder — open
+				// the terminal in $HOME rather than refusing to launch.
+				let dir = item.dir.clone()
+					.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
 				let cmd = item.start_cmd.clone().ok_or_else(|| AppError::Message("no cmd".into()))?;
 				let app_name = state.config.lock().unwrap().settings.terminal_app.clone();
 				let logs = state.dir.join("logs");
