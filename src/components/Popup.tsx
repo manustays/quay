@@ -217,7 +217,7 @@ export function Popup({
 	);
 
 	return (
-		<div className="flex h-screen flex-col overflow-hidden rounded-xl border border-border/60 bg-background/55 text-[13px] backdrop-saturate-150">
+		<div className="flex h-screen flex-col overflow-hidden rounded-xl border border-border/60 bg-background/55 text-[13px] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.10)] backdrop-saturate-150">
 			{/* Brand bar */}
 			<header className="flex items-center gap-2 px-3.5 pt-3 pb-2">
 				<BuoyMark className="size-6 shrink-0" />
@@ -339,10 +339,10 @@ function SectionLabel({ children }: { children: React.ReactNode }): React.JSX.El
 }
 
 /**
- * A group rendered like a service row: status accent + dot, name, member
- * count, aggregate metrics (Σ CPU · Σ memory · max uptime), hover-revealed
- * start-all / stop-all, and a chevron that expands the member rows.
- * Collapsed by default.
+ * A group rendered like a service row: a tall status pill (signalling a
+ * cluster), name, member count, aggregate metrics (Σ CPU · Σ memory · max
+ * uptime), hover-revealed start-all / stop-all, and a chevron that expands the
+ * member rows. Collapsed by default.
  */
 function GroupRow({
 	name,
@@ -367,16 +367,15 @@ function GroupRow({
 	return (
 		<Collapsible open={open} onOpenChange={setOpen}>
 			<div className="group relative flex items-center gap-2 rounded-lg pr-1.5 pl-3 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]">
-				{/* Status accent bar (matches ServiceRow) */}
-				<span
-					className={cn(
-						'absolute top-1.5 bottom-1.5 left-0.5 w-[3px] rounded-full',
-						accent,
-						status === 'starting' && 'animate-pulse',
-					)}
-				/>
 				<CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left outline-none">
-					<span className={cn('size-2 shrink-0 rounded-full', accent)} />
+					{/* Tall pill (~2:1) reads as a cluster of services, not a single dot. */}
+					<span
+						className={cn(
+							'h-3 w-1.5 shrink-0 rounded-full',
+							accent,
+							status === 'starting' && 'animate-pulse',
+						)}
+					/>
 					<ChevronRight
 						className={cn(
 							'size-3 shrink-0 text-muted-foreground transition-transform',

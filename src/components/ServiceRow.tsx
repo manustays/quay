@@ -20,7 +20,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
-import { StackIcon } from './StackIcon';
+import { RowIcon } from './StackIcon';
 import { IconAction, MetricsText } from './RowBits';
 import type { DiscoveredPort, ItemMetrics, ManagedItem, Status } from '../model';
 import {
@@ -54,7 +54,7 @@ interface ServiceRowProps {
 	onDragEnd?: () => void;
 }
 
-/** Per-status color for the left accent bar + status dot. */
+/** Per-status color for the status dot. */
 export const STATUS_ACCENT: Record<Status, string> = {
 	running: 'bg-emerald-500',
 	starting: 'bg-amber-500',
@@ -187,22 +187,19 @@ export function ServiceRow({
 						<GripVertical className="size-3.5" />
 					</button>
 				)}
-				{/* Status accent bar */}
-				<span
-					className={cn(
-						'absolute top-1.5 bottom-1.5 left-0.5 w-[3px] rounded-full',
-						STATUS_ACCENT[status],
-						status === 'starting' && 'animate-pulse',
-					)}
-				/>
-
 				{/* Name + meta — the only click target that toggles expansion */}
 				<CollapsibleTrigger
 					className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left outline-none"
 					title={status === 'error' ? lastError : undefined}
 				>
-					<span className={cn('size-2 shrink-0 rounded-full', STATUS_ACCENT[status])} />
-					<StackIcon stack={item.stack ?? (item.kind === 'docker' ? 'docker' : null)} />
+					<span
+						className={cn(
+							'size-2 shrink-0 rounded-full',
+							STATUS_ACCENT[status],
+							status === 'starting' && 'animate-pulse',
+						)}
+					/>
+					<RowIcon stack={item.stack} kind={item.kind} runMode={item.runMode} />
 					<span className="flex min-w-0 flex-col">
 						<span className="truncate font-heading text-[13px] font-semibold leading-tight">
 							{item.name}
