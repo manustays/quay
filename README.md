@@ -1,3 +1,7 @@
+<center>
+
+![Quay Logo](docs/assets/tray-starting.svg)
+
 # Quay
 
 > **Quay** _(pronounced "key")_ — **Where your ports come in.**
@@ -7,8 +11,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Platform: macOS](https://img.shields.io/badge/platform-macOS-black.svg)](#requirements)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg)](https://tauri.app)
+<a href="https://abhi.am" target="_blank">![About Abhishek](https://img.shields.io/badge/about-me-blue)</a>
 
----
+</center>
+
 
 ## The problem
 
@@ -16,27 +22,11 @@ If you build a lot of local services, you know the dance: remember which folder,
 
 **Quay** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…), Docker containers, and long-running terminal agents.
 
-## What it looks like
+<center>
 
-Click the menubar icon and a popover opens:
+![Quay Popover Screenshot](docs/assets/quay-desktop-screenshot-900.jpg)
 
-```
-┌────────────────────────────────────——─┐
-│ 🔍 search…              [ ■ Stop all] │
-├──────────────────────────────────——───┤
-│ ★ FAVORITES                           │
-│  ● myapp     :5173  [■][↗][>_]        │
-│  ● claude    term   [■]    [>_]       │
-├────────────────────────────────────——─┤
-│  ▸ More (4)                           │
-├────────────────────────────────────——─┤
-│  [+ Add]                  [⚙ Settings]│
-└───────────────────────────────────——──┘
-```
-
-Status at a glance: ● running (green) · ◐ starting (yellow) · ○ stopped (grey) · ✖ error (red).
-
-> 📸 _Screenshots/GIF: add `docs/assets/popover.png` and a short capture once you run it locally (`npm run tauri dev`)._
+</center>
 
 ## Features
 
