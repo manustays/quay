@@ -8,7 +8,7 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { aggregateGroupMetrics, aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { aggregateGroupMetrics, aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { reorder, startItem, stopAll, stopItem } from '../ipc';
@@ -355,13 +355,15 @@ function GroupRow({
 }: {
 	name: string;
 	count: number;
-	status: Status;
+	status: GroupStatus;
 	metrics: { cpuPercent: number; memoryBytes: number; uptimeSec: number | null } | null;
 	onStart: () => void;
 	onStop: () => void;
 	children: React.ReactNode;
 }): React.JSX.Element {
 	const [open, setOpen] = useState(false);
+	// Faded green when only some members run; full accent otherwise.
+	const accent = status === 'partial' ? 'bg-emerald-500/40' : STATUS_ACCENT[status];
 	return (
 		<Collapsible open={open} onOpenChange={setOpen}>
 			<div className="group relative flex items-center gap-2 rounded-lg pr-1.5 pl-3 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]">
@@ -369,12 +371,12 @@ function GroupRow({
 				<span
 					className={cn(
 						'absolute top-1.5 bottom-1.5 left-0.5 w-[3px] rounded-full',
-						STATUS_ACCENT[status],
+						accent,
 						status === 'starting' && 'animate-pulse',
 					)}
 				/>
 				<CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left outline-none">
-					<span className={cn('size-2 shrink-0 rounded-full', STATUS_ACCENT[status])} />
+					<span className={cn('size-2 shrink-0 rounded-full', accent)} />
 					<ChevronRight
 						className={cn(
 							'size-3 shrink-0 text-muted-foreground transition-transform',

@@ -63,7 +63,8 @@ describe('model helpers', () => {
 		expect(aggregateGroupStatus(['running', 'error'])).toBe('error');
 		expect(aggregateGroupStatus(['running', 'starting'])).toBe('starting');
 		expect(aggregateGroupStatus(['running', 'running'])).toBe('running');
-		expect(aggregateGroupStatus(['running', 'stopped'])).toBe('stopped');
+		expect(aggregateGroupStatus(['running', 'stopped'])).toBe('partial');
+		expect(aggregateGroupStatus(['stopped', 'stopped'])).toBe('stopped');
 		expect(aggregateGroupStatus([])).toBe('stopped');
 	});
 });

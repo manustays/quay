@@ -230,14 +230,18 @@ export function groupItems(items: ManagedItem[]): {
 	return { groups, ungrouped };
 }
 
+/** Group-row status: item statuses plus `partial` (some — not all — running). */
+export type GroupStatus = Status | 'partial';
+
 /**
  * Aggregate member statuses for a group row dot:
- * any error > any starting > all running > stopped.
+ * any error > any starting > all running > some running > stopped.
  */
-export function aggregateGroupStatus(statuses: Status[]): Status {
+export function aggregateGroupStatus(statuses: Status[]): GroupStatus {
 	if (statuses.includes('error')) return 'error';
 	if (statuses.includes('starting')) return 'starting';
-	if (statuses.length > 0 && statuses.every((s) => s === 'running')) return 'running';
+	const running = statuses.filter((s) => s === 'running').length;
+	if (running > 0) return running === statuses.length ? 'running' : 'partial';
 	return 'stopped';
 }
 
