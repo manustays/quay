@@ -1,3 +1,17 @@
+# [0.10.0](https://github.com/manustays/quay/compare/v0.9.0...v0.10.0) (2026-07-03)
+
+
+### Bug Fixes
+
+* open terminal CLI tools without a folder ($HOME fallback) ([c2a1ca2](https://github.com/manustays/quay/commit/c2a1ca21b683d0d95b85fc820d088895f85e2612))
+
+
+### Features
+
+* declutter popover rows and glassier shell ([8295f0f](https://github.com/manustays/quay/commit/8295f0f4c13239f20bfb91b866d2e1a7e227e839))
+* enhance group status handling with 'partial' state for mixed item statuses ([08de205](https://github.com/manustays/quay/commit/08de2057eec88c1422cbec666a19955aab2023e4))
+* reset crashed services + row-action cleanup ([17825c3](https://github.com/manustays/quay/commit/17825c3f05c00c65ef3b65c2e69cc9470b291d60))
+
 # [0.9.0](https://github.com/manustays/quay/compare/v0.8.0...v0.9.0) (2026-07-02)
 
 
