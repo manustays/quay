@@ -147,8 +147,11 @@ body,
   cursor: default;
 }
 
+/* No fixed height: the shell sizes to its content (clamped to [min, max] by
+ * the shell's own min/max-height) and reports that height so the native window
+ * tracks it. See useAutoHeight in Popup.tsx. overflow:hidden clips the rounded
+ * corners of anything that would bleed past the shell. */
 #root {
-  height: 100vh;
   overflow: hidden;
 }
 

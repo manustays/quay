@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { invoke } from '@tauri-apps/api/core';
 import { ChevronRight, CirclePower, Play, Plus, Search, Settings, Square, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -32,6 +33,49 @@ interface PopupProps {
 	onSettings: () => void;
 }
 
+// Grow-to-content bounds. Floor is the tauri.conf default so the small-list
+// case matches today and the Add/Settings dialogs (overlays inside this window)
+// never get clipped. The cap is the webview screen's usable height, capped for
+// taste. ponytail: single-monitor only — the tray can live on another display;
+// move the cap into Rust (tray monitor work-area) if that ever bites.
+const POPOVER_MIN = 520;
+const POPOVER_MAX = Math.min(760, Math.round(window.screen.availHeight - 16));
+
+/**
+ * Drive the native window height from the popover's content. Observes the shell
+ * (whose own min/max-height clamps it to [MIN, MAX]) and reports that height to
+ * the `resize_popover` command, which resizes the window and re-pins it under
+ * the tray. rAF-coalesced and deduped by rounded pixel: a burst of layout ticks
+ * (typing in search, expanding a row) collapses to one resize, and the
+ * observe→resize→relayout cycle settles at a fixpoint instead of oscillating.
+ */
+function useAutoHeight(ref: React.RefObject<HTMLElement | null>): void {
+	useLayoutEffect(() => {
+		const el = ref.current;
+		if (!el) return;
+		el.style.setProperty('--popover-max', `${POPOVER_MAX}px`);
+		let last = 0;
+		let frame = 0;
+		const report = (): void => {
+			frame = 0;
+			const height = Math.round(el.offsetHeight);
+			if (height === last) return;
+			last = height;
+			// First paint may briefly show the config's 520 before this lands —
+			// harmless for the common small-list case, a one-time grow otherwise.
+			void invoke('resize_popover', { height });
+		};
+		const observer = new ResizeObserver(() => {
+			if (frame === 0) frame = requestAnimationFrame(report);
+		});
+		observer.observe(el);
+		return () => {
+			observer.disconnect();
+			if (frame !== 0) cancelAnimationFrame(frame);
+		};
+	}, [ref]);
+}
+
 /** The full popover shell: brand bar, search toolbar, scrolling list, footer. */
 export function Popup({
 	items,
@@ -46,6 +90,8 @@ export function Popup({
 	onDismissDiscovered,
 	onSettings,
 }: PopupProps): React.JSX.Element {
+	const shellRef = useRef<HTMLDivElement>(null);
+	useAutoHeight(shellRef);
 	const [query, setQuery] = useState('');
 	// Which service row is expanded — single-open accordion across all rows.
 	const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -232,7 +278,11 @@ export function Popup({
 
 	// ponytail: bg-background is fully opaque (no desktop bleed); add a /NN suffix to bring some vibrancy back.
 	return (
-		<div className="flex h-screen flex-col overflow-hidden rounded-xl border border-border/60 bg-background text-[13px] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.10)]">
+		<div
+			ref={shellRef}
+			style={{ minHeight: POPOVER_MIN, maxHeight: 'var(--popover-max, 760px)' }}
+			className="flex flex-col overflow-hidden rounded-xl border border-border/60 bg-background text-[13px] shadow-[inset_0_1px_0_0_rgba(255,255,255,0.10)]"
+		>
 			{/* Brand bar */}
 			<header className="flex items-center gap-2 px-3.5 pt-3 pb-2">
 				{searchOpen ? (
@@ -304,7 +354,7 @@ export function Popup({
 			</header>
 
 			{/* List body */}
-			<div className="scroll-area flex-1 px-2 pb-1">
+			<div className="scroll-area min-h-0 flex-1 px-2 pb-1">
 				{filtered.length === 0 ? (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 						{items.length === 0 ? 'No services yet. Add one below.' : 'No matches.'}

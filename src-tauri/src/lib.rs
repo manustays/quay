@@ -162,6 +162,27 @@ fn toggle_popover(app: &tauri::AppHandle) {
 	}
 }
 
+/// Resize the popover to fit its content and re-pin it under the tray.
+/// The frontend measures its own shell height (clamped there to the tray
+/// monitor's usable height) and reports it; we floor at the 520 default and
+/// backstop the ceiling. Re-anchoring with TrayCenter keeps the top edge fixed
+/// under the tray so the window grows downward, whatever direction macOS's
+/// `set_size` would otherwise pick.
+#[tauri::command]
+fn resize_popover(app: tauri::AppHandle, height: f64) {
+	if let Some(win) = app.get_webview_window("main") {
+		// ponytail: JS owns the real max (from the webview's screen); 1200 is a
+		// sanity backstop, not the cap. Upgrade both to the tray monitor's
+		// work-area if multi-monitor sizing ever matters.
+		let h = height.clamp(520.0, 1200.0);
+		let _ = win.set_size(tauri::LogicalSize::new(380.0, h));
+		let _ = tauri_plugin_positioner::WindowExt::move_window(
+			&win,
+			tauri_plugin_positioner::Position::TrayCenter,
+		);
+	}
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 	tauri::Builder::default()
@@ -196,6 +217,7 @@ pub fn run() {
 			commands::kill_discovered,
 			commands::ignore_port,
 			commands::reveal_in_finder,
+			resize_popover,
 		])
 		.setup(|app| {
 			// Menubar-only: hide the dock icon (and Cmd-Tab entry). Accessory keeps
