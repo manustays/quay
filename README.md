@@ -10,6 +10,9 @@
 <a href="#requirements"><img src="https://img.shields.io/badge/platform-macOS-black.svg" alt="Platform: macOS" /></a>
 <a href="https://tauri.app"><img src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg" alt="Built with Tauri" /></a>
 <a href="https://abhi.am" target="_blank"><img src="https://img.shields.io/badge/about-me-blue" alt="About Abhishek" /></a>
+
+[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/manustays)
+
 </div>
 
 
@@ -123,10 +126,16 @@ A Rust core owns all process supervision and state; a small vanilla-TypeScript w
 - **Terminal-mode items are best-effort** — the app opens a Terminal/iTerm window but doesn't own that process; "stop" for those is best-effort, and a terminal item with a configured port can sit at `starting` if its window is closed externally.
 - **Releases are not yet code-signed/notarized** — the download opens after an **Open Anyway** step (see [Download](#download)); a signed build removes that.
 
-See the design spec's non-goals for the full list.
 
 ## Roadmap
 
+- Hotkey to open the popover (currently only click the menubar icon)
+- Per-item log viewer (currently you must open the log file in a terminal or editor)
+- Per-item hotkey to start/stop (currently only click the row buttons)
+- System notifications on status changes (currently only the dot and row color change)
+- Configure the port radar's scan interval and ignored ports (currently hardcoded)
+- Configure the menubar icon to show a badge with the number of running items (currently only the dot changes), or track a specific port's status (e.g. a backend service) and show its status in the menubar icon.
+- Cross-platform support (Windows, Linux) — the Rust core is cross-platform, but the UI and process supervision are macOS-specific
 - Signed & notarized releases (CI already publishes universal `.dmg`s — see [`.github/workflows/release.yml`](.github/workflows/release.yml))
 
 ## Contributing
@@ -135,4 +144,4 @@ Contributions welcome — see **[CONTRIBUTING.md](CONTRIBUTING.md)**. In short: 
 
 ## License
 
-[MIT](LICENSE) © 2026 Kumar Abhishek
+[MIT](LICENSE) © 2026 [Kumar Abhishek](https://abhi.am)
