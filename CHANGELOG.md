@@ -1,3 +1,10 @@
+# [0.13.0](https://github.com/manustays/quay/compare/v0.12.0...v0.13.0) (2026-07-04)
+
+
+### Features
+
+* add funding configuration and social media preview image ([1f39c1e](https://github.com/manustays/quay/commit/1f39c1e81be9b7623c5bf42fe1e331d4d4a58669))
+
 # [0.12.0](https://github.com/manustays/quay/compare/v0.11.0...v0.12.0) (2026-07-03)
 
 
