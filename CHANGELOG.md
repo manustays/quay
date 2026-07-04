@@ -1,3 +1,10 @@
+## [0.13.1](https://github.com/manustays/quay/compare/v0.13.0...v0.13.1) (2026-07-04)
+
+
+### Bug Fixes
+
+* prevent tray halo clipping at top edge ([356a0bc](https://github.com/manustays/quay/commit/356a0bcc6001e2690343cc6911bb5edd52ba69f8))
+
 # [0.13.0](https://github.com/manustays/quay/compare/v0.12.0...v0.13.0) (2026-07-04)
 
 
