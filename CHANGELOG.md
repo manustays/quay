@@ -1,3 +1,15 @@
+# [0.14.0](https://github.com/manustays/quay/compare/v0.13.1...v0.14.0) (2026-07-05)
+
+
+### Bug Fixes
+
+* adjust padding for improved layout in DetectedRow and Popup components ([64fd12e](https://github.com/manustays/quay/commit/64fd12e177f7123016a58b4dd75a6b3cfd640ab9))
+
+
+### Features
+
+* richer port radar — manifest names, more stacks, dev-only filter ([9bec927](https://github.com/manustays/quay/commit/9bec927c863249670ba65da3b78f4da7756589d7))
+
 ## [0.13.1](https://github.com/manustays/quay/compare/v0.13.0...v0.13.1) (2026-07-04)
 
 
