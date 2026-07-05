@@ -35,7 +35,7 @@ export function DetectedRow({ entry, onAdopt, onChange, onDismiss }: DetectedRow
 	};
 
 	return (
-		<div className="group relative flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-3 opacity-75 transition-colors hover:bg-foreground/[0.04] hover:opacity-100">
+		<div className="group relative flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-6 opacity-75 transition-colors hover:bg-foreground/[0.04] hover:opacity-100">
 			<span className="size-2 shrink-0 rounded-full border border-dashed border-muted-foreground/60" />
 			<RowIcon stack={entry.stack} />
 			<span className="flex min-w-0 flex-1 flex-col">

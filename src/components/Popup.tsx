@@ -468,22 +468,28 @@ function GroupRow({
 	const accent = status === 'partial' ? 'bg-emerald-500/40' : STATUS_ACCENT[status];
 	return (
 		<Collapsible open={open} onOpenChange={setOpen}>
-			<div className="group relative flex items-center gap-2 rounded-lg pr-1.5 pl-3 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]">
+			<div className="group relative flex items-center gap-2 rounded-lg pr-1.5 pl-6 transition-colors hover:bg-foreground/[0.04] data-[state=open]:bg-foreground/[0.04]">
 				<CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 py-1.5 text-left outline-none">
-					{/* Tall pill (~2:1) reads as a cluster of services, not a single dot. */}
-					<span
-						className={cn(
-							'h-3 w-1.5 shrink-0 rounded-full',
-							accent,
-							status === 'starting' && 'animate-pulse',
-						)}
-					/>
-					<ChevronRight
-						className={cn(
-							'size-3 shrink-0 text-muted-foreground transition-transform',
-							open && 'rotate-90',
-						)}
-					/>
+					{/* Tall pill (~2:1) reads as a cluster of services, not a single dot;
+					    centered in an 8px slot so its column matches a normal row's dot. */}
+					<span className="flex w-2 shrink-0 items-center justify-center">
+						<span
+							className={cn(
+								'h-3 w-1.5 rounded-full',
+								accent,
+								status === 'starting' && 'animate-pulse',
+							)}
+						/>
+					</span>
+					{/* 14px slot so the chevron column lines up with the service-icon column. */}
+					<span className="flex size-3.5 shrink-0 items-center justify-center">
+						<ChevronRight
+							className={cn(
+								'size-3 text-muted-foreground transition-transform',
+								open && 'rotate-90',
+							)}
+						/>
+					</span>
 					<span className="flex min-w-0 flex-col">
 						<span className="truncate font-heading text-[13px] font-semibold leading-tight">
 							{name}
