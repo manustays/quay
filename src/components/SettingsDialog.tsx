@@ -105,6 +105,14 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 							/>
 						</label>
 
+						<label className="flex items-center justify-between gap-2 text-[13px]">
+							<span>Detected: dev stacks only</span>
+							<Switch
+								checked={settings.radarDevOnly}
+								onCheckedChange={(v) => set({ radarDevOnly: v })}
+							/>
+						</label>
+
 						{settings.ignoredPorts.length > 0 && (
 							<div className="grid gap-1.5">
 								<Label className="text-xs text-muted-foreground">Ignored ports (click to unhide)</Label>

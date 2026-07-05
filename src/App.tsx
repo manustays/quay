@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { detectFolder, getItems, getStatuses, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
+import { detectFolder, getItems, getSettings, getStatuses, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
 import { blankItem, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
@@ -31,6 +31,10 @@ export function App(): React.JSX.Element {
 	const [lastErrors, setLastErrors] = useState<Map<string, string>>(new Map());
 	const [metrics, setMetrics] = useState<Map<string, ItemMetrics>>(new Map());
 	const [discovered, setDiscovered] = useState<DiscoveredPort[]>([]);
+	// Radar filter toggle, mirrored from persisted settings; re-read on save.
+	// Defaults on (matches the Rust default) so the first paint before settings
+	// load doesn't flash the unfiltered list.
+	const [radarDevOnly, setRadarDevOnly] = useState(true);
 
 	// Dialog state: `editing` is undefined when closed, null for "add new",
 	// or the item being edited; `settingsOpen` toggles the settings dialog.
@@ -41,6 +45,12 @@ export function App(): React.JSX.Element {
 
 	const refresh = useCallback(async () => {
 		setItems(await getItems());
+	}, []);
+
+	// Pull the radar filter flag from persisted settings. Called on mount and
+	// after the settings dialog saves so the toggle takes effect immediately.
+	const reloadSettings = useCallback(async () => {
+		setRadarDevOnly((await getSettings()).radarDevOnly);
 	}, []);
 
 	/**
@@ -72,6 +82,7 @@ export function App(): React.JSX.Element {
 
 	useEffect(() => {
 		void refresh();
+		void reloadSettings();
 
 		// onStatusChanged resolves to an unlisten fn asynchronously; guard against
 		// the effect being torn down before the subscription resolves.
@@ -127,7 +138,7 @@ export function App(): React.JSX.Element {
 			cancelled = true;
 			for (const fn of unlisteners) fn();
 		};
-	}, [refresh]);
+	}, [refresh, reloadSettings]);
 
 	// Recomputed only when items change, not on every metrics/radar tick.
 	const groups = useMemo(
@@ -143,6 +154,7 @@ export function App(): React.JSX.Element {
 				lastErrors={lastErrors}
 				metrics={metrics}
 				discovered={discovered}
+				radarDevOnly={radarDevOnly}
 				onChange={refresh}
 				onAdd={() => setEditing(null)}
 				onEdit={(item) => setEditing(item)}
@@ -160,7 +172,7 @@ export function App(): React.JSX.Element {
 			<SettingsDialog
 				open={settingsOpen}
 				onOpenChange={setSettingsOpen}
-				onSaved={refresh}
+				onSaved={() => { void refresh(); void reloadSettings(); }}
 			/>
 		</TooltipProvider>
 	);

@@ -129,11 +129,13 @@ fn resolve(sys: &mut System, pids: &[u32]) -> HashMap<u32, Resolved> {
 			proc_.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
 		let proc_name = proc_.name().to_string_lossy().into_owned();
 		let cwd = proc_.cwd().map(|p| p.to_string_lossy().into_owned());
+		// Prefer the project's manifest name (package.json / Cargo.toml), falling
+		// back to the cwd basename, then the process name for a "/" or missing cwd.
+		// Read once per new PID — resolve() only runs for PIDs not already cached.
 		let name = cwd
 			.as_deref()
-			.and_then(|c| Path::new(c).file_name())
-			.map(|n| n.to_string_lossy().into_owned())
-			.filter(|n| n != "/") // a cwd of "/" is not a project folder
+			.filter(|c| *c != "/") // a cwd of "/" is not a project folder
+			.map(|c| detect::name_from_dir(Path::new(c)))
 			.unwrap_or_else(|| proc_name.clone());
 		// Docker Desktop's host-side proxies own published container ports; tag
 		// them as "docker" so the UI can label them and disable adoption.

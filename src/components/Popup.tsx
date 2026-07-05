@@ -24,6 +24,8 @@ interface PopupProps {
 	lastErrors: Map<string, string>;
 	metrics: Map<string, ItemMetrics>;
 	discovered: DiscoveredPort[];
+	/** When true, hide detected listeners with no recognized dev stack. */
+	radarDevOnly: boolean;
 	onChange: () => void;
 	onAdd: () => void;
 	onEdit: (item: ManagedItem) => void;
@@ -83,6 +85,7 @@ export function Popup({
 	lastErrors,
 	metrics,
 	discovered,
+	radarDevOnly,
 	onChange,
 	onAdd,
 	onEdit,
@@ -119,7 +122,12 @@ export function Popup({
 	const { groups, ungrouped } = groupItems(others);
 	// Radar entries on unmanaged ports are adoptable listeners; entries tagged
 	// with a managed item are port collisions, badged on that item's row.
-	const unmanaged = discovered.filter((d) => d.managedItemId == null);
+	// `radarDevOnly` hides listeners with no recognized dev stack (DBs, caches,
+	// system services); it also drops non-adoptable infra (Docker port proxies,
+	// forced to stack "docker"). Port collisions stay badged regardless.
+	const unmanaged = discovered.filter(
+		(d) => d.managedItemId == null && (!radarDevOnly || (d.stack != null && d.adoptable)),
+	);
 	const conflicts = new Map(
 		discovered.filter((d) => d.managedItemId != null).map((d) => [d.managedItemId as string, d]),
 	);

@@ -62,7 +62,16 @@ pub struct Settings {
 	#[serde(rename = "launchAtLogin")] pub launch_at_login: bool,
 	/// Ports hidden from the discovered-listeners ("Detected") section.
 	#[serde(rename = "ignoredPorts", default)] pub ignored_ports: Vec<u16>,
+	/// When true, the Detected section hides listeners with no recognized dev
+	/// stack (databases, caches, system services). On by default; the serde
+	/// default keeps it on for configs written before this field existed.
+	#[serde(rename = "radarDevOnly", default = "default_radar_dev_only")]
+	pub radar_dev_only: bool,
 }
+
+/// Default for [`Settings::radar_dev_only`] — on. A bare `#[serde(default)]`
+/// would give `false`, so old configs need this to inherit the new default.
+fn default_radar_dev_only() -> bool { true }
 
 /// Default metrics sampling interval (seconds). Used both by `Settings::default`
 /// and as the serde fallback for configs written before this field existed.
@@ -77,6 +86,7 @@ impl Default for Settings {
 			browser: "default".into(),
 			launch_at_login: false,
 			ignored_ports: Vec::new(),
+			radar_dev_only: true,
 		}
 	}
 }
