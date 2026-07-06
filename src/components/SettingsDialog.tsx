@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { enable, disable } from '@tauri-apps/plugin-autostart';
+import { enable, disable, isEnabled } from '@tauri-apps/plugin-autostart';
 import { Button } from '@/components/ui/button';
 import {
 	Dialog,
@@ -46,7 +46,11 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 		if (!settings) return;
 		try {
 			await updateSettings(settings);
-			settings.launchAtLogin ? await enable() : await disable();
+			// Only touch the launchd LaunchAgent when the state actually changes —
+			// re-registering it re-fires macOS's "can run in the background" notice.
+			const currentlyEnabled = await isEnabled();
+			if (settings.launchAtLogin && !currentlyEnabled) await enable();
+			else if (!settings.launchAtLogin && currentlyEnabled) await disable();
 			onOpenChange(false);
 			onSaved();
 		} catch (e) {
