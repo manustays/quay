@@ -8,6 +8,7 @@
 //! delta). Runs inside the port-radar loop (scanner.rs): 5 s cadence, only
 //! while the popover is visible; snapshots go out on `agents_discovered`.
 
+use crate::state::AppState;
 use serde::Serialize;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use std::time::SystemTime;
 use sysinfo::{
 	MINIMUM_CPU_UPDATE_INTERVAL, Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind,
 };
+use tauri::{AppHandle, Manager};
 
 /// One discovered agent session, pushed to the frontend.
 #[derive(Debug, Clone, Serialize)]
@@ -173,15 +175,40 @@ fn is_active(log_mtime: Option<SystemTime>, cpu_percent: f32, now: SystemTime) -
 	recent_write || cpu_percent > 10.0
 }
 
+/// True when `pid` currently is an `agent` session in `cwd` — the kill
+/// command's revalidation guard, so a stale row (session exited, PID reused —
+/// even by the same binary in another folder) can't kill an unrelated process.
+pub fn matches_identity(pid: u32, agent: &str, cwd: &str) -> bool {
+	let mut sys = System::new();
+	let sys_pid = Pid::from_u32(pid);
+	sys.refresh_processes_specifics(
+		ProcessesToUpdate::Some(&[sys_pid]),
+		true,
+		ProcessRefreshKind::nothing().with_cmd(UpdateKind::Always).with_cwd(UpdateKind::Always),
+	);
+	let Some(proc_) = sys.process(sys_pid) else { return false };
+	let argv: Vec<String> = proc_.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+	agent_from_argv(&argv).is_some_and(|d| d.kind == agent)
+		&& proc_.cwd().is_some_and(|c| c.to_string_lossy() == cwd)
+}
+
 /// One scan pass: list tty PIDs, resolve the agent candidates among them, and
 /// return the snapshot to emit. Rows are rebuilt from scratch every pass (a
 /// PID gone between `ps` and the sysinfo refresh is simply skipped) and
 /// sorted by pid so rows don't jump between passes.
-pub fn scan() -> Vec<DiscoveredAgent> {
+pub fn scan(app: &AppHandle) -> Vec<DiscoveredAgent> {
 	let tty = tty_pids();
 	if tty.is_empty() {
 		return Vec::new();
 	}
+
+	// Ignored agent+cwd pairs, snapshotted under a short lock (like the port
+	// radar's settings snapshot) before any resolution work.
+	let ignored: Vec<crate::model::IgnoredAgent> = {
+		let state = app.state::<AppState>();
+		let cfg = state.config.lock().unwrap();
+		cfg.settings.ignored_agents.clone()
+	};
 
 	let mut sys = System::new();
 	let sys_pids: Vec<Pid> = tty.iter().map(|&p| Pid::from_u32(p)).collect();
@@ -203,6 +230,9 @@ pub fn scan() -> Vec<DiscoveredAgent> {
 				proc_.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
 			let def = agent_from_argv(&argv)?;
 			let cwd = proc_.cwd()?.to_string_lossy().into_owned();
+			if ignored.iter().any(|i| i.agent == def.kind && i.cwd == cwd) {
+				return None;
+			}
 			Some((pid.as_u32(), def, cwd))
 		})
 		.collect();

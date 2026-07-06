@@ -217,7 +217,10 @@ pub fn run() {
 			commands::set_suppress_hide,
 			commands::kill_discovered,
 			commands::ignore_port,
+			commands::kill_agent,
+			commands::ignore_agent,
 			commands::reveal_in_finder,
+			commands::reveal_path,
 			resize_popover,
 		])
 		.setup(|app| {

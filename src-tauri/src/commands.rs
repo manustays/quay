@@ -485,15 +485,32 @@ pub fn open_terminal(app: AppHandle, id: String) -> Result<(), AppError> {
 	terminal::open_folder(&app_name, &dir)
 }
 
+/// `open -R` a path in Finder — shared by the id-keyed `reveal_in_finder`
+/// and the path-keyed `reveal_path`.
+fn reveal(path: &str) -> Result<(), AppError> {
+	std::process::Command::new("open").args(["-R", path]).spawn()
+		.map_err(|e| AppError::Message(e.to_string()))?;
+	Ok(())
+}
+
 /// Reveal the item's folder in Finder.
 #[tauri::command]
 pub fn reveal_in_finder(app: AppHandle, id: String) -> Result<(), AppError> {
 	let state = app.state::<AppState>();
 	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
 	let dir = item.dir.clone().ok_or_else(|| AppError::Message("no dir".into()))?;
-	std::process::Command::new("open").args(["-R", &dir]).spawn()
-		.map_err(|e| AppError::Message(e.to_string()))?;
-	Ok(())
+	reveal(&dir)
+}
+
+/// Reveal an arbitrary directory in Finder (agent rows carry a cwd, not an
+/// item id). The path is frontend-provided: require an existing directory
+/// before shelling out.
+#[tauri::command]
+pub fn reveal_path(path: String) -> Result<(), AppError> {
+	if !std::path::Path::new(&path).is_dir() {
+		return Err(AppError::Message(format!("not a directory: {path}")));
+	}
+	reveal(&path)
 }
 
 /// Return the last `lines` lines from the item's log file (empty string if none).
@@ -559,6 +576,45 @@ pub fn ignore_port(state: State<AppState>, port: u16) -> Result<(), AppError> {
 		if !cfg.settings.ignored_ports.contains(&port) {
 			cfg.settings.ignored_ports.push(port);
 			cfg.settings.ignored_ports.sort_unstable();
+		}
+	}
+	persist(&state)
+}
+
+/// Signal a discovered agent session: SIGTERM by default (TUIs restore the
+/// terminal on it), SIGKILL when `force`.
+///
+/// Not `kill_discovered` — that revalidation is port-keyed. Here the PID is
+/// revalidated against the (agent kind, cwd) identity immediately before
+/// signalling, so a stale radar row (session exited, PID reused — even by the
+/// same binary in another folder) can't kill an unrelated process. Signals
+/// the PID only — never its process group, which we did not create.
+#[tauri::command]
+pub fn kill_agent(pid: u32, agent: String, cwd: String, force: bool) -> Result<(), AppError> {
+	if !crate::agent_radar::matches_identity(pid, &agent, &cwd) {
+		return Err(AppError::Message(format!(
+			"process {pid} is no longer a {agent} session in {cwd}"
+		)));
+	}
+	let sig = if force { libc::SIGKILL } else { libc::SIGTERM };
+	// A failed kill (EPERM, ESRCH on a just-exited PID) must surface — a
+	// silent Ok would tell the user the session was terminated.
+	if unsafe { libc::kill(pid as i32, sig) } != 0 {
+		let err = std::io::Error::last_os_error();
+		return Err(AppError::Message(format!("could not signal process {pid}: {err}")));
+	}
+	Ok(())
+}
+
+/// Hide all sessions of `agent` in `cwd` from the Agents section, persistently.
+/// Un-ignoring happens in Settings (the whole `Settings` is saved back).
+#[tauri::command]
+pub fn ignore_agent(state: State<AppState>, agent: String, cwd: String) -> Result<(), AppError> {
+	{
+		let mut cfg = state.config.lock().unwrap();
+		let entry = crate::model::IgnoredAgent { agent, cwd };
+		if !cfg.settings.ignored_agents.contains(&entry) {
+			cfg.settings.ignored_agents.push(entry);
 		}
 	}
 	persist(&state)

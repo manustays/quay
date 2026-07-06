@@ -137,6 +137,31 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 								</div>
 							</div>
 						)}
+
+						{settings.ignoredAgents.length > 0 && (
+							<div className="grid gap-1.5">
+								<Label className="text-xs text-muted-foreground">Ignored agents (click to unhide)</Label>
+								<div className="flex flex-wrap gap-1">
+									{settings.ignoredAgents.map((ia) => (
+										<button
+											key={`${ia.agent}:${ia.cwd}`}
+											type="button"
+											onClick={() =>
+												set({
+													ignoredAgents: settings.ignoredAgents.filter(
+														(x) => !(x.agent === ia.agent && x.cwd === ia.cwd),
+													),
+												})
+											}
+											className="rounded-full bg-muted px-2 py-0.5 font-mono text-[11px] text-muted-foreground hover:bg-destructive/15 hover:text-destructive"
+											title={`Stop ignoring ${ia.agent} sessions in ${ia.cwd}`}
+										>
+											{ia.agent} · {ia.cwd.split('/').pop() || ia.cwd} ×
+										</button>
+									))}
+								</div>
+							</div>
+						)}
 					</div>
 				)}
 

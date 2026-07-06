@@ -96,6 +96,24 @@ export function onPortsDiscovered(cb: (d: DiscoveredPort[]) => void): Promise<Un
 }
 
 /**
+ * Signal a discovered agent session (SIGTERM, or SIGKILL when `force`). The
+ * backend revalidates that `pid` is still that agent session in that cwd
+ * before signalling, so a stale radar row can't kill an unrelated process.
+ */
+export const killAgent = (pid: number, agent: string, cwd: string, force: boolean) =>
+	invoke<void>('kill_agent', { pid, agent, cwd, force });
+
+/**
+ * Persistently hide all sessions of `agent` in `cwd` from the Agents section
+ * (un-ignore in Settings).
+ */
+export const ignoreAgent = (agent: string, cwd: string) =>
+	invoke<void>('ignore_agent', { agent, cwd });
+
+/** Reveal a directory in Finder (agent rows carry a cwd, not an item id). */
+export const revealPath = (path: string) => invoke<void>('reveal_path', { path });
+
+/**
  * Subscribe to agent-radar snapshots. The callback receives the full list of
  * discovered agent sessions per scan pass (only while the popover is open);
  * replace state wholesale so ended sessions drop out. Returns an unlisten fn.

@@ -81,6 +81,15 @@ export function App(): React.JSX.Element {
 		setDiscovered((prev) => prev.filter((d) => d.port !== entry.port));
 	}, []);
 
+	/**
+	 * Optimistically drop an agent row (pid-keyed) after a successful kill or
+	 * ignore — the next radar snapshot (≤5 s away) is the source of truth and
+	 * also hides any sibling sessions covered by a new ignore.
+	 */
+	const dismissAgent = useCallback((entry: DiscoveredAgent) => {
+		setAgents((prev) => prev.filter((a) => a.pid !== entry.pid));
+	}, []);
+
 	useEffect(() => {
 		void refresh();
 		void reloadSettings();
@@ -163,6 +172,7 @@ export function App(): React.JSX.Element {
 				onEdit={(item) => setEditing(item)}
 				onAdopt={(entry) => void adopt(entry)}
 				onDismissDiscovered={dismissDiscovered}
+				onDismissAgent={dismissAgent}
 				onSettings={() => setSettingsOpen(true)}
 			/>
 			<ServiceForm

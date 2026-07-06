@@ -55,6 +55,14 @@ pub struct ManagedItem {
 	#[serde(rename = "autoStart")] pub auto_start: bool,
 }
 
+/// One agent+cwd pair hidden from the Agents (agent radar) section.
+/// Structured, not a `"kind:cwd"` string — macOS paths may contain `:`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct IgnoredAgent {
+	pub agent: String,
+	pub cwd: String,
+}
+
 /// App-wide settings.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Settings {
@@ -66,6 +74,9 @@ pub struct Settings {
 	#[serde(rename = "launchAtLogin")] pub launch_at_login: bool,
 	/// Ports hidden from the discovered-listeners ("Detected") section.
 	#[serde(rename = "ignoredPorts", default)] pub ignored_ports: Vec<u16>,
+	/// Agent sessions hidden from the Agents section. Ignoring hides **all**
+	/// sessions of that agent in that cwd.
+	#[serde(rename = "ignoredAgents", default)] pub ignored_agents: Vec<IgnoredAgent>,
 	/// When true, the Detected section hides listeners with no recognized dev
 	/// stack (databases, caches, system services). On by default; the serde
 	/// default keeps it on for configs written before this field existed.
@@ -90,6 +101,7 @@ impl Default for Settings {
 			browser: "default".into(),
 			launch_at_login: false,
 			ignored_ports: Vec::new(),
+			ignored_agents: Vec::new(),
 			radar_dev_only: true,
 		}
 	}

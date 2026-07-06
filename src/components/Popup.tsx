@@ -35,6 +35,8 @@ interface PopupProps {
 	onAdopt: (entry: DiscoveredPort) => void;
 	/** Optimistically remove a discovered entry after a successful kill/ignore. */
 	onDismissDiscovered: (entry: DiscoveredPort) => void;
+	/** Optimistically remove an agent row after a successful kill/ignore. */
+	onDismissAgent: (entry: DiscoveredAgent) => void;
 	onSettings: () => void;
 }
 
@@ -95,6 +97,7 @@ export function Popup({
 	onEdit,
 	onAdopt,
 	onDismissDiscovered,
+	onDismissAgent,
 	onSettings,
 }: PopupProps): React.JSX.Element {
 	const shellRef = useRef<HTMLDivElement>(null);
@@ -429,7 +432,7 @@ export function Popup({
 						</CollapsibleTrigger>
 						<CollapsibleContent>
 							{agents.map((entry) => (
-								<AgentRow key={entry.pid} entry={entry} />
+								<AgentRow key={entry.pid} entry={entry} onDismiss={onDismissAgent} />
 							))}
 						</CollapsibleContent>
 					</Collapsible>

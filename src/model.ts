@@ -48,6 +48,8 @@ export interface Settings {
 	launchAtLogin: boolean;
 	/** Ports hidden from the Detected (port radar) section. */
 	ignoredPorts: number[];
+	/** Agent+cwd pairs hidden from the Agents (agent radar) section. */
+	ignoredAgents: { agent: string; cwd: string }[];
 	/** When true, the Detected section hides listeners with no recognized dev stack. */
 	radarDevOnly: boolean;
 }
