@@ -1,4 +1,5 @@
 use crate::model::{AppError, ManagedItem};
+use std::collections::BTreeMap;
 use std::fs::OpenOptions;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -30,6 +31,62 @@ pub fn interactive_path() -> Option<&'static str> {
 		Some(path.to_string())
 	})
 	.as_deref()
+}
+
+/// Run a one-shot control command to completion and return its result.
+///
+/// Used by `command`-kind items whose lifecycle is a pair of user commands
+/// (e.g. `omlx start` / `omlx stop`) that launch or signal a *detached* daemon
+/// and return promptly — unlike [`spawn_background`], nothing is owned or kept.
+/// Same PATH recipe as [`spawn_background`]: [`interactive_path`] first, then
+/// `env` on top so the user can override. cwd = `dir` or `$HOME`.
+///
+/// A nonzero exit is an error carrying the last line of stderr (falling back to
+/// stdout), so a failed start/stop surfaces in the UI instead of a false state.
+///
+/// ponytail: runs synchronously via `.output()` with no timeout — a control
+/// command that never returns will wedge this Tauri worker. The contract is
+/// that start/stop commands return promptly (they signal a daemon, not host it);
+/// a `wait_timeout`-based kill is the upgrade path if that ever bites.
+pub fn run_command(
+	dir: Option<&str>,
+	env: &BTreeMap<String, String>,
+	cmd: &str,
+) -> Result<(), AppError> {
+	let workdir = dir
+		.map(str::to_string)
+		.filter(|d| !d.is_empty())
+		.unwrap_or_else(|| std::env::var("HOME").unwrap_or_else(|_| "/".into()));
+
+	let mut command = Command::new("/bin/zsh");
+	command
+		.arg("-lc")
+		.arg(cmd)
+		.current_dir(&workdir)
+		.stdin(Stdio::null());
+	if let Some(path) = interactive_path() {
+		command.env("PATH", path);
+	}
+	for (k, v) in env {
+		command.env(k, v);
+	}
+
+	let out = command
+		.output()
+		.map_err(|e| AppError::Message(format!("run failed: {e}")))?;
+	if out.status.success() {
+		return Ok(());
+	}
+	let stderr = String::from_utf8_lossy(&out.stderr);
+	let stdout = String::from_utf8_lossy(&out.stdout);
+	let detail = stderr
+		.lines()
+		.rev()
+		.find(|l| !l.trim().is_empty())
+		.or_else(|| stdout.lines().rev().find(|l| !l.trim().is_empty()))
+		.unwrap_or("no output")
+		.trim();
+	Err(AppError::Message(format!("command failed: {detail}")))
 }
 
 /// A tracked background process and its log file path.

@@ -48,6 +48,28 @@ pub fn terminal_status(
 	}
 }
 
+/// Decide a `command`-kind item's status from a port probe. Pure.
+///
+/// The daemon is not owned, so the configured port is the only liveness signal:
+/// - port up → `Running`.
+/// - port down while `current == Starting` → still coming up after an explicit
+///   Start; stay `Starting`.
+/// - port down otherwise (idle, or a previously-Running service that dropped) →
+///   `Stopped`.
+///
+/// Mirrors how [`terminal_status`] leans on `current` to disambiguate. A start
+/// command that exits 0 but never binds the port stays `Starting` — the
+/// nonzero-exit error path in `start_item` catches the common start failures.
+pub fn command_status(port_up: bool, current: Option<Status>) -> Status {
+	if port_up {
+		Status::Running
+	} else if current == Some(Status::Starting) {
+		Status::Starting
+	} else {
+		Status::Stopped
+	}
+}
+
 /// Aggregate all item statuses into a tray attention state. Pure.
 ///
 /// Precedence: any `Error` > any `Starting` > `None` (nominal). `Running` and
@@ -151,11 +173,11 @@ pub fn poll_once(app: &AppHandle) {
 	let items = state.config.lock().unwrap().items.clone();
 	for item in items {
 		let current = state.statuses.lock().unwrap().get(&item.id).copied();
-		// Brew + Docker are polled even when Stopped: their state lives outside the
-		// app (launchctl / `docker ps`), so a container started or stopped elsewhere
-		// is still reflected.
+		// Brew + Docker + Command are polled even when Stopped: their state lives
+		// outside the app (launchctl / `docker ps` / a detached daemon on a port),
+		// so a service started or stopped elsewhere is still reflected.
 		if matches!(current, None | Some(Status::Stopped))
-			&& !matches!(item.kind, ItemKind::Brew | ItemKind::Docker)
+			&& !matches!(item.kind, ItemKind::Brew | ItemKind::Docker | ItemKind::Command)
 		{
 			continue; // never started; leave as-is
 		}
@@ -169,6 +191,22 @@ pub fn poll_once(app: &AppHandle) {
 				item.container_name.as_deref()
 					.map(crate::docker::docker_status)
 					.unwrap_or(Status::Stopped)
+			}
+			ItemKind::Command => {
+				// Not owned — the configured port is the only liveness signal.
+				// Same probe as a background item (HTTP when health_path is set,
+				// else a TCP connect). Portless command items have no probe source,
+				// so they keep whatever start/stop last set.
+				match item.port {
+					Some(p) => {
+						let port_up = match item.health_path.as_deref() {
+							Some(path) => http_ok(p, path),
+							None => port_open(p),
+						};
+						command_status(port_up, current)
+					}
+					None => current.unwrap_or(Status::Stopped),
+				}
 			}
 			_ => match item.run_mode {
 				RunMode::Background => {
@@ -247,6 +285,25 @@ mod tests {
 	#[test]
 	fn alive_port_closed_is_starting() {
 		assert_eq!(decide_status(&Probe { pid_alive: true, has_port: true, port_open: false }), Status::Starting);
+	}
+
+	#[test]
+	fn command_port_up_is_running() {
+		assert_eq!(command_status(true, None), Status::Running);
+		assert_eq!(command_status(true, Some(Status::Stopped)), Status::Running);
+		assert_eq!(command_status(true, Some(Status::Starting)), Status::Running);
+	}
+	#[test]
+	fn command_starting_holds_until_port_opens() {
+		// Just pressed Start; daemon not bound yet — stay Starting, don't flash Stopped.
+		assert_eq!(command_status(false, Some(Status::Starting)), Status::Starting);
+	}
+	#[test]
+	fn command_port_down_when_idle_or_dropped_is_stopped() {
+		assert_eq!(command_status(false, None), Status::Stopped);
+		assert_eq!(command_status(false, Some(Status::Stopped)), Status::Stopped);
+		// A previously-Running daemon whose port dropped → Stopped.
+		assert_eq!(command_status(false, Some(Status::Running)), Status::Stopped);
 	}
 
 	#[test]

@@ -132,6 +132,19 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 			alert('Container name is required for a Docker service.');
 			return;
 		}
+		// A command service is tracked purely by its port (start/stop are detached
+		// commands, not an owned process), so both a port and a start command are
+		// required — without a port its status could never resolve past "starting".
+		if (data.kind === 'command') {
+			if (!portText.trim()) {
+				alert('A Command service needs a Port — its status is read from that port.');
+				return;
+			}
+			if (!data.startCmd?.trim()) {
+				alert('A Command service needs a Start command (e.g. `omlx start`).');
+				return;
+			}
+		}
 		const result: ManagedItem = {
 			...data,
 			port: portText ? Number(portText) : null,
@@ -163,6 +176,7 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 
 	const isBrew = data.kind === 'brew';
 	const isDocker = data.kind === 'docker';
+	const isCommand = data.kind === 'command';
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
@@ -184,6 +198,7 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 								<SelectItem value="brew">Homebrew service</SelectItem>
 								<SelectItem value="docker">Docker container</SelectItem>
 								<SelectItem value="cli">CLI</SelectItem>
+								<SelectItem value="command">Command (start/stop)</SelectItem>
 							</SelectContent>
 						</Select>
 					</Field>
@@ -244,7 +259,7 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 						<Input type="number" value={portText} onChange={(e) => setPortText(e.target.value)} />
 					</Field>
 
-					{!isDocker && (
+					{!isDocker && !isCommand && (
 						<Field label="Run mode">
 							<Select value={data.runMode} onValueChange={(v) => set({ runMode: v as RunMode })}>
 								<SelectTrigger className="w-full"><SelectValue /></SelectTrigger>

@@ -46,10 +46,10 @@ Each registered service:
 {
   "id": "9f1c…",              // stable UUID; also the log filename
   "name": "myapp",
-  "kind": "project",          // "project" | "brew" | "cli" | "docker" ("agent" still accepted as a legacy alias for "cli")
+  "kind": "project",          // "project" | "brew" | "cli" | "docker" | "command" ("agent" still accepted as a legacy alias for "cli")
   "dir": "/Users/me/dev/myapp", // null for brew items
   "startCmd": "npm run dev",   // null for brew items
-  "stopCmd": null,             // null = SIGTERM the owned child group; brew manages its own
+  "stopCmd": null,             // command kind: shell command to stop the service; else null (SIGTERM the owned child group)
   "port": 5173,                // null if the service has no port
   "runMode": "background",     // "background" | "terminal"
   "brewFormula": null,         // e.g. "mysql" when kind = "brew"
@@ -71,10 +71,10 @@ Each registered service:
 |-------|------|-------|
 | `id` | string | UUID v4. Assigned automatically; don't reuse. Names the item's log file (`logs/<id>.log`). |
 | `name` | string | Display name. |
-| `kind` | `"project"` \| `"brew"` \| `"cli"` \| `"docker"` | Determines how the item is started and how status is read. `"agent"` is accepted as a legacy alias for `"cli"`. |
-| `dir` | string \| null | Working directory. Required for `project`/`cli`; `null` for `brew`. |
-| `startCmd` | string \| null | Shell command run via `zsh -lc "<cmd>"` (so your PATH / nvm / pyenv resolve). `null` for `brew`. |
-| `stopCmd` | string \| null | Reserved. `null` means a background item is stopped by signalling its process group. |
+| `kind` | `"project"` \| `"brew"` \| `"cli"` \| `"docker"` \| `"command"` | Determines how the item is started and how status is read. `"agent"` is accepted as a legacy alias for `"cli"`. |
+| `dir` | string \| null | Working directory. Required for `project`/`cli`; optional for `command` (defaults to `$HOME`); `null` for `brew`. |
+| `startCmd` | string \| null | Shell command run via `zsh -lc "<cmd>"` (so your PATH / nvm / pyenv resolve). `null` for `brew`. Required for `command`. |
+| `stopCmd` | string \| null | For `command` items, the shell command that stops the service (e.g. `omlx stop`), run via `zsh -lc`. For other kinds it is unused — `null` means a background item is stopped by signalling its process group. |
 | `port` | number \| null | TCP port. Enables the browser button and the port-based status check. |
 | `runMode` | `"background"` \| `"terminal"` | `background` = headless child + log file; `terminal` = opens a Terminal/iTerm window. Brew items are always treated as background. |
 | `brewFormula` | string \| null | Homebrew formula name when `kind = "brew"`. |
@@ -98,6 +98,35 @@ Status is computed, not stored. The four states are:
 - `error` — process exited unexpectedly, or a start/stop operation failed.
 
 Runtime state (PIDs, current status, log handles) is **not** persisted — it lives in memory only. On relaunch every item starts as `stopped`.
+
+## Command services (`kind: "command"`)
+
+For a **detached daemon controlled by its own CLI** — a launchd service, or a tool with `start`/`stop` subcommands (e.g. oMLX on `:9000`, Hermes) — that Quay should *manage* but not *own*:
+
+- **Start** runs `startCmd` (e.g. `omlx start`) via `zsh -lc` and waits for it to return. A nonzero exit surfaces as an error; the daemon it launched keeps running detached.
+- **Stop** runs `stopCmd` (e.g. `omlx stop`). Required to stop from Quay — there is no owned process to signal and no port-kill fallback (the CLI is the source of truth).
+- **Status** is driven by the configured **`port`** (required), polled even when stopped — so starting or stopping the service *outside* Quay is reflected within one poll. Set `healthPath` to switch the probe from a TCP connect to an HTTP 2xx check (note: an admin root that returns 401/redirects will then read as stopped — leave it unset to use a plain port check).
+- Quay never owns the process, so (like `brew`/`terminal` items) it is **left running when Quay quits**.
+
+The ↗ **Open in browser** action (opens `http://localhost:<port>`) appears once the service is running, same as any ported item.
+
+```jsonc
+{
+  "id": "44444444-4444-4444-8444-444444444444",
+  "name": "oMLX",
+  "kind": "command",
+  "dir": null,
+  "startCmd": "omlx start",
+  "stopCmd": "omlx stop",
+  "port": 9000,
+  "runMode": "background",   // ignored for command items
+  "order": 3,
+  "favorite": false,
+  "env": {},
+  "healthPath": null,
+  "autoStart": false
+}
+```
 
 ## Example
 

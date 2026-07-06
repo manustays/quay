@@ -70,6 +70,7 @@ function descriptor(item: ManagedItem): string {
 	if (item.kind === 'brew') return 'brew';
 	if (item.kind === 'docker') return 'docker';
 	if (item.kind === 'cli') return 'cli';
+	if (item.kind === 'command') return 'command';
 	return item.runMode;
 }
 

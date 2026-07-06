@@ -291,6 +291,17 @@ pub fn start_item(app: AppHandle, id: String) -> Result<(), AppError> {
 			// Mark Starting; the poll loop flips to Running once `docker ps` confirms.
 			set_status(&app, &id, Status::Starting);
 		}
+		ItemKind::Command => {
+			// Run the user's start command (e.g. `omlx start`); it launches a
+			// detached daemon and returns. We don't own the process — status is
+			// driven by the port from here on. Mark Starting; the poll loop flips
+			// to Running once the port opens (or leaves it Starting if it never does).
+			let cmd = item.start_cmd.clone()
+				.filter(|c| !c.trim().is_empty())
+				.ok_or_else(|| AppError::Message("no start command".into()))?;
+			supervisor::run_command(item.dir.as_deref(), &item.env, &cmd)?;
+			set_status(&app, &id, Status::Starting);
+		}
 		_ => match item.run_mode {
 			RunMode::Background => {
 				// If the configured port is already serving — e.g. a previous instance
@@ -355,6 +366,16 @@ pub fn stop_item(app: AppHandle, id: String) -> Result<(), AppError> {
 		if let Some(n) = item.container_name.as_deref().filter(|n| !n.trim().is_empty()) {
 			docker::docker_stop(n)?;
 		}
+	} else if let ItemKind::Command = item.kind {
+		// Run the user's stop command (e.g. `omlx stop`). We never owned the
+		// daemon, so there is no child to signal and no `stop_port` fallback —
+		// the CLI is the source of truth for shutdown. Poll confirms Stopped once
+		// the port closes (a brief false-Stopped flicker is possible if the daemon
+		// lingers; the next poll re-derives Running until the port actually drops).
+		let cmd = item.stop_cmd.clone()
+			.filter(|c| !c.trim().is_empty())
+			.ok_or_else(|| AppError::Message("no stop command".into()))?;
+		supervisor::run_command(item.dir.as_deref(), &item.env, &cmd)?;
 	} else {
 		// Take the entry out under a scoped lock, then stop after the guard drops
 		// so the mutex is never held across the (potentially blocking) stop call.
@@ -423,13 +444,21 @@ pub fn stop_all(app: AppHandle) -> Result<(), AppError> {
 		// a container that merely happens to be configured but was started elsewhere.
 		let extra: Vec<String> = cfg.items.iter().filter(|i| match i.kind {
 			ItemKind::Brew => true,
-			ItemKind::Docker => matches!(
+			// Command + Docker aren't in the running map — include the ones we
+			// currently see up so Stop-All runs their stop command, and only those
+			// (never tear down a service that was started elsewhere and isn't up here).
+			ItemKind::Docker | ItemKind::Command => matches!(
 				statuses.get(&i.id),
 				Some(Status::Running | Status::Starting)
 			),
 			_ => false,
 		}).map(|i| i.id.clone()).collect();
-		running.into_iter().chain(extra).collect()
+		// Dedup: `extra` is status-based and `running` is map-based, so they can't
+		// currently overlap, but guard against a future regression that double-stops.
+		let mut ids: Vec<String> = running.into_iter().chain(extra).collect();
+		ids.sort();
+		ids.dedup();
+		ids
 	};
 	for id in ids { let _ = stop_item(app.clone(), id); }
 	Ok(())

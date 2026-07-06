@@ -262,10 +262,11 @@ pub fn run() {
 				let mut claimed_ports = std::collections::HashSet::new();
 				for item in &items {
 					if !matches!(item.run_mode, model::RunMode::Background) { continue; }
-					// Brew + Docker items must not enter the running map: brew is tracked
-					// via launchctl, Docker via `docker ps` (containers have no host PID,
-					// and a published port maps through docker-proxy, not the container).
-					if matches!(item.kind, model::ItemKind::Brew | model::ItemKind::Docker) { continue; }
+					// Brew + Docker + Command items must not enter the running map: brew
+					// is tracked via launchctl, Docker via `docker ps`, and Command is a
+					// detached daemon tracked purely by its port (adopting it would give
+					// it a phantom running-map entry Quay would then try to signal).
+					if matches!(item.kind, model::ItemKind::Brew | model::ItemKind::Docker | model::ItemKind::Command) { continue; }
 					let Some(p) = item.port else { continue; };
 					let already = st.running.lock().unwrap().contains_key(&item.id);
 					if already { claimed_ports.insert(p); continue; }

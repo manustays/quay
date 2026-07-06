@@ -11,6 +11,10 @@ pub enum ItemKind {
 	#[serde(alias = "agent")]
 	Cli,
 	Docker,
+	/// A detached daemon controlled by user `startCmd`/`stopCmd` (e.g. a
+	/// launchd/CLI-managed service). Quay does not own the process; status is
+	/// driven by the configured port, like `brew`/`docker`.
+	Command,
 }
 
 /// How an item is launched.
@@ -138,6 +142,7 @@ mod tests {
 		assert_eq!(serde_json::to_string(&ItemKind::Brew).unwrap(), "\"brew\"");
 		assert_eq!(serde_json::to_string(&ItemKind::Cli).unwrap(), "\"cli\"");
 		assert_eq!(serde_json::to_string(&ItemKind::Docker).unwrap(), "\"docker\"");
+		assert_eq!(serde_json::to_string(&ItemKind::Command).unwrap(), "\"command\"");
 		assert_eq!(serde_json::to_string(&RunMode::Terminal).unwrap(), "\"terminal\"");
 	}
 

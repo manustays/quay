@@ -1,4 +1,4 @@
-import { Box, Server, SquareTerminal, Terminal } from 'lucide-react';
+import { Box, Server, SquareTerminal, Terminal, Waypoints } from 'lucide-react';
 import type { ItemKind, RunMode } from '../model';
 
 /**
@@ -83,10 +83,12 @@ export function RowIcon({
 	const Fallback =
 		kind === 'project'
 			? Server
-			: kind === 'cli'
-				? runMode === 'terminal'
-					? SquareTerminal
-					: Terminal
-				: Box;
+			: kind === 'command'
+				? Waypoints
+				: kind === 'cli'
+					? runMode === 'terminal'
+						? SquareTerminal
+						: Terminal
+					: Box;
 	return <Fallback className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />;
 }
