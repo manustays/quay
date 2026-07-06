@@ -239,6 +239,12 @@ pub fn spawn_scan_loop(app: AppHandle) {
 			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
 				let _ = app.emit("ports_discovered", &discovered);
 			}
+			// Agent radar shares this loop: same visibility gate (the ps+sysinfo
+			// work itself is skipped while hidden, not just the emit), same cadence.
+			let agents = crate::agent_radar::scan();
+			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+				let _ = app.emit("agents_discovered", &agents);
+			}
 			// ponytail: hardcoded 5 s cadence; a settings knob only if asked for
 			std::thread::sleep(Duration::from_secs(5));
 		}

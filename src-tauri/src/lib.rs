@@ -1,3 +1,4 @@
+pub mod agent_radar;
 pub mod brew;
 pub mod commands;
 pub mod detect;
