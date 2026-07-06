@@ -10,8 +10,7 @@
 <a href="#requirements"><img src="https://img.shields.io/badge/platform-macOS-black.svg" alt="Platform: macOS" /></a>
 <a href="https://tauri.app"><img src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg" alt="Built with Tauri" /></a>
 <a href="https://abhi.am" target="_blank"><img src="https://img.shields.io/badge/about-me-blue" alt="About Abhishek" /></a>
-
-[![Github-sponsors](https://img.shields.io/badge/sponsor-30363D?style=for-the-badge&logo=GitHub-Sponsors&logoColor=#EA4AAA)](https://github.com/sponsors/manustays)
+<a href="https://github.com/sponsors/manustays"><img src="https://img.shields.io/github/sponsors/manustays?label=Sponsor&logo=githubsponsors" alt="Support my work" /></a>
 
 </div>
 
@@ -23,7 +22,7 @@ If you build a lot of local services, you know the dance: remember which folder,
 **Quay** puts all of that one click away. Register an app folder once; then start it, see its live status, open its web UI, or drop into a terminal in its folder — straight from the menubar. It also manages Homebrew services (MySQL, MongoDB, Redis…), Docker containers, and long-running terminal agents.
 
 <div align="center">
-<img src="docs/assets/quay-desktop-1000.png" width="900" alt="Quay Popover Screenshot" />
+<img src="docs/assets/quay-desktop.png" width="900" alt="Quay Popover Screenshot" />
 </div>
 
 
@@ -137,6 +136,12 @@ A Rust core owns all process supervision and state; a small vanilla-TypeScript w
 - Configure the menubar icon to show a badge with the number of running items (currently only the dot changes), or track a specific port's status (e.g. a backend service) and show its status in the menubar icon.
 - Cross-platform support (Windows, Linux) — the Rust core is cross-platform, but the UI and process supervision are macOS-specific
 - Signed & notarized releases (CI already publishes universal `.dmg`s — see [`.github/workflows/release.yml`](.github/workflows/release.yml))
+
+## Support
+
+Quay is an independent project I build and maintain in my spare time. The best way to support it is to use it, share feedback, report issues, or contribute.
+
+If you find it useful and would also like to support my independent open-source work financially, [GitHub Sponsors](https://github.com/sponsors/manustays) is available.
 
 ## Contributing
 
