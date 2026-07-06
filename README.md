@@ -40,7 +40,7 @@ If you build a lot of local services, you know the dance: remember which folder,
 - **Open a terminal** already `cd`'d into the service's folder, when you actually need to watch logs.
 - **Auto-detect on add** — pick a folder and the app reads `package.json` / `requirements.txt` / `.env` to pre-fill the start command and port.
 - **Port radar** — dev servers you started outside Quay show up in a **Detected** section (project name + framework icon), with one-click **adopt as service**, kill, or ignore. A stopped item whose port is taken by another process gets a ⚠ collision badge.
-- **Agent radar** — terminal AI-agent sessions (Claude Code, Codex CLI, OpenCode, Pi) you started yourself show up in an **Agents** section with project name, CPU/memory/uptime, and an active/idle dot, plus reveal-in-Finder, kill, and ignore.
+- **Agent radar** — terminal AI-agent sessions (Claude Code, Codex CLI, OpenCode, Pi) you started yourself show up in an **Agents** section with project name + stack icon, session name on hover, CPU/memory/uptime, and an active/idle dot; sessions in the same folder club into a project row with stacked agent badges. Reveal-in-Finder, kill, and ignore per session.
 - **Tech-stack icons** — rows show the detected framework/runtime (Vite, Next, Django, Rails, Go, Rust, Docker, …) as a brand-colored icon.
 - **Groups** — label related items (backend + frontend of one app) with a shared group; they cluster together with an aggregate status dot and start-all/stop-all.
 - **Favorites + search** — pin the services you use most; the rest tuck under a collapsible "More".
