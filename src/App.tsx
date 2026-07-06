@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { detectFolder, getItems, getSettings, getStatuses, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
-import { blankItem, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from './model';
+import { detectFolder, getItems, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
+import { blankItem, type DiscoveredAgent, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -31,6 +31,7 @@ export function App(): React.JSX.Element {
 	const [lastErrors, setLastErrors] = useState<Map<string, string>>(new Map());
 	const [metrics, setMetrics] = useState<Map<string, ItemMetrics>>(new Map());
 	const [discovered, setDiscovered] = useState<DiscoveredPort[]>([]);
+	const [agents, setAgents] = useState<DiscoveredAgent[]>([]);
 	// Radar filter toggle, mirrored from persisted settings; re-read on save.
 	// Defaults on (matches the Rust default) so the first paint before settings
 	// load doesn't flash the unfiltered list.
@@ -111,8 +112,9 @@ export function App(): React.JSX.Element {
 			setMetrics(new Map(list.map((m) => [m.id, m])));
 		}).then(track);
 
-		// Port-radar snapshots likewise replace wholesale per scan pass.
+		// Port-radar and agent-radar snapshots likewise replace wholesale per pass.
 		void onPortsDiscovered(setDiscovered).then(track);
+		void onAgentsDiscovered(setAgents).then(track);
 
 		// Seed current statuses once. `status_changed` only fires on change, so a
 		// status set by the backend's startup poll (before this listener attached)
@@ -154,6 +156,7 @@ export function App(): React.JSX.Element {
 				lastErrors={lastErrors}
 				metrics={metrics}
 				discovered={discovered}
+				agents={agents}
 				radarDevOnly={radarDevOnly}
 				onChange={refresh}
 				onAdd={() => setEditing(null)}

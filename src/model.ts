@@ -70,6 +70,29 @@ export interface DiscoveredPort {
 }
 
 /**
+ * Agent kind detected by the agent radar — keep in lockstep with the Rust
+ * `agent_radar::AGENTS` table and the `StackIcon` keys.
+ */
+export type AgentKind = 'claude' | 'codex' | 'opencode' | 'pi';
+
+/**
+ * An interactive terminal AI-agent session found by the backend agent radar —
+ * mirrors the Rust `DiscoveredAgent` struct (serde rename_all = "camelCase").
+ */
+export interface DiscoveredAgent {
+	pid: number;
+	agent: AgentKind;
+	/** Display name: the cwd basename (project folder). */
+	name: string;
+	cwd: string;
+	uptimeSec: number;
+	cpuPercent: number;
+	memoryBytes: number;
+	/** "active" = recent session-log write or busy CPU — a recent-activity signal, not proof of work. */
+	state: 'active' | 'idle';
+}
+
+/**
  * Per-item resource usage — mirrors the Rust `ItemMetrics` struct.
  * `cpuPercent` is summed across the process tree (may exceed 100 on multi-core);
  * `memoryBytes` is summed resident memory in bytes.

@@ -9,10 +9,11 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { aggregateGroupMetrics, aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { aggregateGroupMetrics, aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { reorder, startItem, stopAll, stopItem } from '../ipc';
+import { AgentRow } from './AgentRow';
 import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
 import { IconAction, MetricsText } from './RowBits';
@@ -24,6 +25,8 @@ interface PopupProps {
 	lastErrors: Map<string, string>;
 	metrics: Map<string, ItemMetrics>;
 	discovered: DiscoveredPort[];
+	/** Terminal agent sessions found by the agent radar. */
+	agents: DiscoveredAgent[];
 	/** When true, hide detected listeners with no recognized dev stack. */
 	radarDevOnly: boolean;
 	onChange: () => void;
@@ -85,6 +88,7 @@ export function Popup({
 	lastErrors,
 	metrics,
 	discovered,
+	agents,
 	radarDevOnly,
 	onChange,
 	onAdd,
@@ -411,6 +415,21 @@ export function Popup({
 									onChange={onChange}
 									onDismiss={onDismissDiscovered}
 								/>
+							))}
+						</CollapsibleContent>
+					</Collapsible>
+				)}
+
+				{/* Terminal agent sessions found by the agent radar. */}
+				{query === '' && agents.length > 0 && (
+					<Collapsible className="mt-0.5">
+						<CollapsibleTrigger className="group/agents flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
+							<ChevronRight className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
+							Agents ({agents.length})
+						</CollapsibleTrigger>
+						<CollapsibleContent>
+							{agents.map((entry) => (
+								<AgentRow key={entry.pid} entry={entry} />
 							))}
 						</CollapsibleContent>
 					</Collapsible>

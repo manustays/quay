@@ -2,6 +2,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
 	DetectResult,
+	DiscoveredAgent,
 	DiscoveredPort,
 	ItemMetrics,
 	ItemStatus,
@@ -92,6 +93,15 @@ export const ignorePort = (port: number) => invoke<void>('ignore_port', { port }
  */
 export function onPortsDiscovered(cb: (d: DiscoveredPort[]) => void): Promise<UnlistenFn> {
 	return listen<DiscoveredPort[]>('ports_discovered', (e) => cb(e.payload));
+}
+
+/**
+ * Subscribe to agent-radar snapshots. The callback receives the full list of
+ * discovered agent sessions per scan pass (only while the popover is open);
+ * replace state wholesale so ended sessions drop out. Returns an unlisten fn.
+ */
+export function onAgentsDiscovered(cb: (a: DiscoveredAgent[]) => void): Promise<UnlistenFn> {
+	return listen<DiscoveredAgent[]>('agents_discovered', (e) => cb(e.payload));
 }
 
 /**
