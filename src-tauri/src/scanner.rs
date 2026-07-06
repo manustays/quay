@@ -229,6 +229,8 @@ fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPo
 pub fn spawn_scan_loop(app: AppHandle) {
 	std::thread::spawn(move || {
 		let mut cache: HashMap<u32, Resolved> = HashMap::new();
+		// Codex rollout first-lines are immutable — cached across passes.
+		let mut codex_meta = HashMap::new();
 		loop {
 			let visible = app.state::<AppState>().visible.load(Ordering::Relaxed);
 			if !visible {
@@ -241,7 +243,7 @@ pub fn spawn_scan_loop(app: AppHandle) {
 			}
 			// Agent radar shares this loop: same visibility gate (the ps+sysinfo
 			// work itself is skipped while hidden, not just the emit), same cadence.
-			let agents = crate::agent_radar::scan(&app);
+			let agents = crate::agent_radar::scan(&app, &mut codex_meta);
 			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
 				let _ = app.emit("agents_discovered", &agents);
 			}
