@@ -141,6 +141,22 @@ async fn run_update_check(app: &tauri::AppHandle, silent: bool) {
 	}
 }
 
+/// Re-pin the popover under the tray icon.
+///
+/// The positioner plugin unwraps `current_monitor()`; a window macOS
+/// considers off-screen (e.g. hidden/ordered-out — a late `resize_popover`
+/// after hide-on-blur hits this) has no monitor, and moving it would panic
+/// the main thread and kill the app. Skip the re-pin instead: the next
+/// `toggle_popover` re-anchors before showing.
+fn pin_under_tray(win: &tauri::WebviewWindow) {
+	if matches!(win.current_monitor(), Ok(Some(_))) {
+		let _ = tauri_plugin_positioner::WindowExt::move_window(
+			win,
+			tauri_plugin_positioner::Position::TrayCenter,
+		);
+	}
+}
+
 /// Toggle the popover window: show+focus if hidden, hide if visible.
 fn toggle_popover(app: &tauri::AppHandle) {
 	use std::sync::atomic::Ordering;
@@ -151,10 +167,7 @@ fn toggle_popover(app: &tauri::AppHandle) {
 				app.state::<state::AppState>().visible.store(false, Ordering::Relaxed);
 			}
 		} else {
-			let _ = tauri_plugin_positioner::WindowExt::move_window(
-				&win,
-				tauri_plugin_positioner::Position::TrayCenter,
-			);
+			pin_under_tray(&win);
 			if win.show().is_ok() {
 				app.state::<state::AppState>().visible.store(true, Ordering::Relaxed);
 				let _ = win.set_focus();
@@ -177,10 +190,7 @@ fn resize_popover(app: tauri::AppHandle, height: f64) {
 		// work-area if multi-monitor sizing ever matters.
 		let h = height.clamp(520.0, 1200.0);
 		let _ = win.set_size(tauri::LogicalSize::new(380.0, h));
-		let _ = tauri_plugin_positioner::WindowExt::move_window(
-			&win,
-			tauri_plugin_positioner::Position::TrayCenter,
-		);
+		pin_under_tray(&win);
 	}
 }
 
