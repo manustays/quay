@@ -84,14 +84,53 @@ export type AgentKind = 'claude' | 'codex' | 'opencode' | 'pi';
 export interface DiscoveredAgent {
 	pid: number;
 	agent: AgentKind;
-	/** Display name: the cwd basename (project folder). */
+	/** Display name: the project's manifest name, falling back to the cwd basename. */
 	name: string;
 	cwd: string;
+	/** Detected tech stack keyword for the project folder (e.g. "vite"). */
+	stack: string | null;
+	/** Best-effort session label (claude: first prompt; codex: thread name). cwd-keyed. */
+	sessionName: string | null;
 	uptimeSec: number;
 	cpuPercent: number;
 	memoryBytes: number;
 	/** "active" = recent session-log write or busy CPU — a recent-activity signal, not proof of work. */
 	state: 'active' | 'idle';
+}
+
+/** Two or more agent sessions sharing one project folder, clubbed into a row. */
+export interface AgentFolder {
+	cwd: string;
+	name: string;
+	stack: string | null;
+	agents: DiscoveredAgent[];
+}
+
+/**
+ * Club agent sessions sharing a cwd (≥2) into {@link AgentFolder}s; lone
+ * sessions stay flat. The merged list keeps the input's order by each
+ * entry's first member (input arrives pid-sorted from the backend).
+ */
+export function groupAgentsByCwd(agents: DiscoveredAgent[]): (AgentFolder | DiscoveredAgent)[] {
+	const byCwd = new Map<string, DiscoveredAgent[]>();
+	for (const agent of agents) {
+		const members = byCwd.get(agent.cwd);
+		if (members) members.push(agent);
+		else byCwd.set(agent.cwd, [agent]);
+	}
+	const out: (AgentFolder | DiscoveredAgent)[] = [];
+	const emitted = new Set<string>();
+	for (const agent of agents) {
+		if (emitted.has(agent.cwd)) continue;
+		emitted.add(agent.cwd);
+		const members = byCwd.get(agent.cwd) ?? [agent];
+		out.push(
+			members.length > 1
+				? { cwd: agent.cwd, name: agent.name, stack: agent.stack, agents: members }
+				: agent,
+		);
+	}
+	return out;
 }
 
 /**

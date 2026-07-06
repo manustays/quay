@@ -2,11 +2,13 @@ import { describe, it, expect } from 'vitest';
 import {
 	aggregateGroupMetrics,
 	aggregateGroupStatus,
+	groupAgentsByCwd,
 	groupItems,
 	matchesSearch,
 	moveInList,
 	splitFavorites,
 	statusDot,
+	type DiscoveredAgent,
 	type ManagedItem,
 } from './model';
 
@@ -58,6 +60,22 @@ describe('model helpers', () => {
 		expect(aggregateGroupMetrics([m('a', 10, 100, 5), m('b', 2.5, 50, 60)]))
 			.toEqual({ cpuPercent: 12.5, memoryBytes: 150, uptimeSec: 60 });
 		expect(aggregateGroupMetrics([m('a', 1, 1, null)])?.uptimeSec).toBeNull();
+	});
+	it('groupAgentsByCwd clubs ≥2 sharing a cwd, keeps first-pid order', () => {
+		/** Build a DiscoveredAgent fixture. */
+		const agent = (pid: number, cwd: string): DiscoveredAgent => ({
+			pid, agent: 'claude', name: cwd.split('/').pop() ?? cwd, cwd, stack: null,
+			sessionName: null, uptimeSec: 0, cpuPercent: 0, memoryBytes: 0, state: 'idle',
+		});
+		const [a, b, c, d] = [agent(1, '/x/app'), agent(2, '/y/solo'), agent(3, '/x/app'), agent(4, '/z/lone')];
+		const out = groupAgentsByCwd([a, b, c, d]);
+		// Folder for /x/app (pids 1+3) first, then flat singles in pid order.
+		expect(out).toHaveLength(3);
+		expect('agents' in out[0] && out[0].agents.map(m => m.pid)).toEqual([1, 3]);
+		expect('agents' in out[1]).toBe(false);
+		expect((out[1] as DiscoveredAgent).pid).toBe(2);
+		expect((out[2] as DiscoveredAgent).pid).toBe(4);
+		expect(groupAgentsByCwd([])).toEqual([]);
 	});
 	it('aggregateGroupStatus precedence', () => {
 		expect(aggregateGroupStatus(['running', 'error'])).toBe('error');

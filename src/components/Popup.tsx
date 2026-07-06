@@ -9,11 +9,11 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { aggregateGroupMetrics, aggregateGroupStatus, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { aggregateGroupMetrics, aggregateGroupStatus, groupAgentsByCwd, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { reorder, startItem, stopAll, stopItem } from '../ipc';
-import { AgentRow } from './AgentRow';
+import { AgentFolderRow, AgentRow } from './AgentRow';
 import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
 import { IconAction, MetricsText } from './RowBits';
@@ -138,6 +138,8 @@ export function Popup({
 	const conflicts = new Map(
 		discovered.filter((d) => d.managedItemId != null).map((d) => [d.managedItemId as string, d]),
 	);
+	// Agent sessions sharing a project folder club into one row (≥2 members).
+	const agentEntries = groupAgentsByCwd(agents);
 	// Reordering only makes sense on the full, unfiltered list.
 	const canReorder = query === '';
 
@@ -370,37 +372,55 @@ export function Popup({
 
 			{/* List body */}
 			<div className="scroll-area min-h-0 flex-1 px-2 pb-1">
-				{filtered.length === 0 ? (
+				{filtered.length === 0 && (
 					<p className="px-2 py-8 text-center text-xs text-muted-foreground">
 						{items.length === 0 ? 'No services yet. Add one below.' : 'No matches.'}
 					</p>
-				) : (
-					<>
-						{favorites.length > 0 && (
-							<>
-								<SectionLabel>Favorites</SectionLabel>
-								{query
-									? favorites.map((item, i) => renderRow(item, i, 'fav', i))
-									: renderClusters(favParts, 'fav-grp:', 'fav', 0)}
-							</>
-						)}
+				)}
 
-						{others.length > 0 &&
-							(query ? (
-								others.map((item, i) => renderRow(item, favorites.length + i, 'other', i))
-							) : (
-								<Collapsible defaultOpen className="mt-0.5">
-									<CollapsibleTrigger className="group/more flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
-										<ChevronRight className="size-3 transition-transform group-data-[state=open]/more:rotate-90" />
-										More ({others.length})
-									</CollapsibleTrigger>
-									<CollapsibleContent>
-										{renderClusters({ groups, ungrouped }, 'grp:', 'other', favorites.length)}
-									</CollapsibleContent>
-								</Collapsible>
-							))}
+				{favorites.length > 0 && (
+					<>
+						<SectionLabel>Favorites</SectionLabel>
+						{query
+							? favorites.map((item, i) => renderRow(item, i, 'fav', i))
+							: renderClusters(favParts, 'fav-grp:', 'fav', 0)}
 					</>
 				)}
+
+				{/* Terminal agent sessions found by the agent radar; same-folder
+				    sessions club into one AgentFolderRow. */}
+				{query === '' && agents.length > 0 && (
+					<Collapsible className="mt-0.5">
+						<CollapsibleTrigger className="group/agents flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
+							<ChevronRight className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
+							Agents ({agents.length})
+						</CollapsibleTrigger>
+						<CollapsibleContent>
+							{agentEntries.map((entry) =>
+								'agents' in entry ? (
+									<AgentFolderRow key={entry.cwd} folder={entry} onDismiss={onDismissAgent} />
+								) : (
+									<AgentRow key={entry.pid} entry={entry} onDismiss={onDismissAgent} />
+								),
+							)}
+						</CollapsibleContent>
+					</Collapsible>
+				)}
+
+				{others.length > 0 &&
+					(query ? (
+						others.map((item, i) => renderRow(item, favorites.length + i, 'other', i))
+					) : (
+						<Collapsible defaultOpen className="mt-0.5">
+							<CollapsibleTrigger className="group/more flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
+								<ChevronRight className="size-3 transition-transform group-data-[state=open]/more:rotate-90" />
+								More ({others.length})
+							</CollapsibleTrigger>
+							<CollapsibleContent>
+								{renderClusters({ groups, ungrouped }, 'grp:', 'other', favorites.length)}
+							</CollapsibleContent>
+						</Collapsible>
+					))}
 
 				{/* Unmanaged listeners found by the port radar (not searched/reordered). */}
 				{query === '' && unmanaged.length > 0 && (
@@ -418,21 +438,6 @@ export function Popup({
 									onChange={onChange}
 									onDismiss={onDismissDiscovered}
 								/>
-							))}
-						</CollapsibleContent>
-					</Collapsible>
-				)}
-
-				{/* Terminal agent sessions found by the agent radar. */}
-				{query === '' && agents.length > 0 && (
-					<Collapsible className="mt-0.5">
-						<CollapsibleTrigger className="group/agents flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
-							<ChevronRight className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
-							Agents ({agents.length})
-						</CollapsibleTrigger>
-						<CollapsibleContent>
-							{agents.map((entry) => (
-								<AgentRow key={entry.pid} entry={entry} onDismiss={onDismissAgent} />
 							))}
 						</CollapsibleContent>
 					</Collapsible>
