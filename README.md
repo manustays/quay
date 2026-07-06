@@ -112,7 +112,6 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 | [Development](docs/development.md) | Dev setup, project layout, running tests |
 | [Architecture](docs/architecture.md) | How the Rust core and webview fit together |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
-| [Design spec](docs/specs/2026-06-26-menubar-service-manager-design.md) | The original design document |
 
 ## How it works (in one paragraph)
 

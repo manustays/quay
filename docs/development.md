@@ -106,4 +106,3 @@ The full list of commands (in `src-tauri/src/commands.rs`, registered in `lib.rs
 ## Further reading
 
 - [Architecture](architecture.md) — the design in more depth.
-- [Design spec](specs/2026-06-26-menubar-service-manager-design.md) — the original decisions and rationale.

@@ -83,7 +83,7 @@ Guidelines:
 
 ## Project documentation
 
-When you add or change a core feature, update the relevant doc under `docs/` (and the [design spec](docs/specs/2026-06-26-menubar-service-manager-design.md) if the behavior changes).
+When you add or change a core feature, update the relevant doc under `docs/`.
 
 ## Reporting bugs
 
