@@ -1,3 +1,16 @@
+# [0.15.0](https://github.com/manustays/quay/compare/v0.14.0...v0.15.0) (2026-07-06)
+
+
+### Bug Fixes
+
+* only toggle autostart when state changes to stop repeated BTM notification ([94d7fd1](https://github.com/manustays/quay/commit/94d7fd19bb64e03cffb567fea5808b24505fde54))
+
+
+### Features
+
+* add command service kind for CLI-managed detached daemons ([9438dc2](https://github.com/manustays/quay/commit/9438dc28261d3f754587dece6b37dc8a1de998eb))
+* update assets for improved visuals and remove outdated images ([2725da2](https://github.com/manustays/quay/commit/2725da2d864621f3f97631cf235469c7d08a4c3d))
+
 # [0.14.0](https://github.com/manustays/quay/compare/v0.13.1...v0.14.0) (2026-07-05)
 
 
