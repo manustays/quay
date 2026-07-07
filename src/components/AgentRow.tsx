@@ -8,7 +8,7 @@ import {
 	CollapsibleContent,
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
-import { RowIcon } from './StackIcon';
+import { RowIcon, StackIcon } from './StackIcon';
 import { IconAction, MetricsText } from './RowBits';
 
 interface AgentRowProps {
@@ -78,24 +78,31 @@ export function AgentRow({ entry, onDismiss }: AgentRowProps): React.JSX.Element
 				</span>
 			</span>
 
-			<div className="flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-				<IconAction label="Reveal in Finder" onClick={act(() => revealPath(entry.cwd), false)}>
-					<FolderOpen />
-				</IconAction>
-				<IconAction
-					label="Kill session (⌥ = force)"
-					onClick={(e) =>
-						void act(() => killAgent(entry.pid, entry.agent, entry.cwd, e.altKey))(e)
-					}
-				>
-					<Square />
-				</IconAction>
-				<IconAction
-					label="Ignore this agent here (hides all its sessions in this folder)"
-					onClick={act(() => ignoreAgent(entry.agent, entry.cwd))}
-				>
-					<EyeOff />
-				</IconAction>
+			{/* Resting layers glyph reserves the toolbar's width and cross-fades to
+			    the actions on hover — no reflow, no overlap. */}
+			<div className="relative flex shrink-0 items-center">
+				<div className="flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+					<IconAction label="Reveal in Finder" onClick={act(() => revealPath(entry.cwd), false)}>
+						<FolderOpen />
+					</IconAction>
+					<IconAction
+						label="Kill session (⌥ = force)"
+						onClick={(e) =>
+							void act(() => killAgent(entry.pid, entry.agent, entry.cwd, e.altKey))(e)
+						}
+					>
+						<Square />
+					</IconAction>
+					<IconAction
+						label="Ignore this agent here (hides all its sessions in this folder)"
+						onClick={act(() => ignoreAgent(entry.agent, entry.cwd))}
+					>
+						<EyeOff />
+					</IconAction>
+				</div>
+				<span className="pointer-events-none absolute inset-0 flex items-center justify-end opacity-100 transition-opacity group-hover:opacity-0">
+					<StackIcon stack={entry.stack} />
+				</span>
 			</div>
 		</div>
 	);
@@ -132,7 +139,16 @@ export function AgentFolderRow({
 		<Collapsible open={open} onOpenChange={setOpen}>
 			<div className="group relative flex items-center gap-2 rounded-lg py-1.5 pr-1.5 pl-6 opacity-75 transition-colors hover:bg-foreground/[0.04] hover:opacity-100 data-[state=open]:bg-foreground/[0.04] data-[state=open]:opacity-100">
 				<CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-2 text-left outline-none">
-					<StateDot active={anyActive} />
+					{/* Tall pill in an 8px slot mirrors the service GroupRow, so the folder's
+					    label column lines up with a single AgentRow's dot + icon columns. */}
+					<span className="flex w-2 shrink-0 items-center justify-center">
+						<span
+							className={cn(
+								'h-3 w-1.5 rounded-full',
+								anyActive ? 'animate-pulse bg-emerald-500' : 'bg-muted-foreground/40',
+							)}
+						/>
+					</span>
 					{/* 14px slot keeps the chevron aligned with the icon column. */}
 					<span className="flex size-3.5 shrink-0 items-center justify-center">
 						<ChevronRight
@@ -142,7 +158,6 @@ export function AgentFolderRow({
 							)}
 						/>
 					</span>
-					<RowIcon stack={folder.stack} />
 					<span className="flex min-w-0 flex-col">
 						<span
 							className="truncate font-heading text-[13px] font-semibold leading-tight"
@@ -156,9 +171,12 @@ export function AgentFolderRow({
 						</span>
 					</span>
 				</CollapsibleTrigger>
-				{/* Stacked agent badges: which agents are in here, and their state. */}
-				<div className="flex shrink-0 items-center -space-x-1.5">
-					{folder.agents.slice(0, MAX_BADGES).map((a) => (
+				{/* Stacked agent badges + a static layers glyph, matching a single
+				    row's resting right edge. Folder has no per-row actions — kill lives
+				    on the member rows inside. */}
+				<div className="flex shrink-0 items-center gap-1.5">
+					<div className="flex items-center -space-x-1.5">
+						{folder.agents.slice(0, MAX_BADGES).map((a) => (
 						<span
 							key={a.pid}
 							title={a.sessionName ?? `${a.agent} · pid ${a.pid}`}
@@ -176,6 +194,9 @@ export function AgentFolderRow({
 						</span>
 					)}
 				</div>
+				{/* Detected project tech-stack brand (Node/Vite/…); nothing if unknown. */}
+				<StackIcon stack={folder.stack} />
+			</div>
 			</div>
 			<CollapsibleContent>
 				<div className="ml-2.5 border-l border-border/60 pl-1">
