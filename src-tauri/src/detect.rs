@@ -169,6 +169,15 @@ fn stack_from_dir_with(dir: &Path, pkg: Option<&serde_json::Value>) -> Option<&'
 	// Generic runtime fallbacks ("node", "python") are deferred to the end:
 	// a Rails/Django/Go repo often carries a package.json for its JS tooling
 	// (jsbundling, Tailwind) and must not be mislabeled by it.
+	// Tauri wraps a web frontend into a native desktop app — it's the shipping
+	// stack, so it wins over the Vite/React the frontend also carries. Covers
+	// both a repo root (src-tauri/tauri.conf.json) and the src-tauri/ dir itself
+	// (tauri.conf.json), the latter otherwise falling through to Cargo.toml->rust.
+	// ponytail: standard layout only; add a @tauri-apps/* dep check if a repo
+	// puts its conf elsewhere.
+	if dir.join("src-tauri/tauri.conf.json").exists() || dir.join("tauri.conf.json").exists() {
+		return Some("tauri");
+	}
 	let mut fallback: Option<&'static str> = None;
 	if let Some(v) = pkg {
 		let has_dep = |name: &str| {
@@ -369,6 +378,21 @@ mod tests {
 			r#"{"dependencies":{"react":"18"},"devDependencies":{"vite":"5"}}"#,
 		).unwrap();
 		assert_eq!(stack_from_dir(&d), Some("vite"));
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn stack_from_dir_prefers_tauri_over_frontend_and_rust() {
+		let d = tmp();
+		// A Tauri app: Vite frontend at root, tauri.conf.json under src-tauri/.
+		std::fs::write(d.join("package.json"), r#"{"devDependencies":{"vite":"5"}}"#).unwrap();
+		std::fs::create_dir_all(d.join("src-tauri")).unwrap();
+		std::fs::write(d.join("src-tauri/tauri.conf.json"), "{}").unwrap();
+		std::fs::write(d.join("src-tauri/Cargo.toml"), "[package]\n").unwrap();
+		assert_eq!(stack_from_dir(&d), Some("tauri"));
+		// Scanning the src-tauri/ dir itself (conf at its root, alongside Cargo.toml)
+		// is tauri, not rust.
+		assert_eq!(stack_from_dir(&d.join("src-tauri")), Some("tauri"));
 		std::fs::remove_dir_all(&d).ok();
 	}
 
