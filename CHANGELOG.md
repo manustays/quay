@@ -1,3 +1,22 @@
+# [0.16.0](https://github.com/manustays/quay/compare/v0.15.0...v0.16.0) (2026-07-09)
+
+
+### Bug Fixes
+
+* guard popover re-pin against monitor-less window to stop positioner panic ([34479c1](https://github.com/manustays/quay/commit/34479c1b0bcbea8bc1b4d1819410237796dd0210))
+
+
+### Features
+
+* **radar:** agent kill/ignore/reveal ([7fcc603](https://github.com/manustays/quay/commit/7fcc603c3101a528c5873392921711bc35af692d))
+* **radar:** agent session discovery backend ([1134a4a](https://github.com/manustays/quay/commit/1134a4a8cf37cadba5b296f7b03b55323c8f0f4a))
+* **radar:** detect Tauri as primary tech-stack over frontend bundler ([598cc61](https://github.com/manustays/quay/commit/598cc61d8733854266fe2ac27f719d476c2c333a))
+* **radar:** project identity + session names in agent discovery ([da156d1](https://github.com/manustays/quay/commit/da156d1a46e3e9c02c1c2140f296a49f761b88a6))
+* **ui:** agents section in popup ([cc33f4b](https://github.com/manustays/quay/commit/cc33f4b9c3daa976c3163e5fc5720d62a8c40bd2))
+* **ui:** align agent folder rows, move tech-stack icon to right edge ([eb94c51](https://github.com/manustays/quay/commit/eb94c510046fdf02aac52c31fe6a70f5872e5054))
+* **ui:** claude icon, agent folder clubbing, agents above More ([d3cb22b](https://github.com/manustays/quay/commit/d3cb22bddf1ffa99ab91354b192f0569cf7ed7a2))
+* **update:** in-app update banner with daily background check ([6bf7508](https://github.com/manustays/quay/commit/6bf7508243b426505a7d0334b111ff3773bb568b))
+
 # [0.15.0](https://github.com/manustays/quay/compare/v0.14.0...v0.15.0) (2026-07-06)
 
 
