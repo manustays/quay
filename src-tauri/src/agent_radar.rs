@@ -175,6 +175,9 @@ pub enum JumpTarget {
 	Herdr { socket: String, pane: String, workspace: String, tab: String },
 	/// Supacode surface: exact CLI coordinates.
 	Supacode { worktree: String, tab: String, surface: String },
+	/// Cmux surface: `cmux://workspace/<ws>/surface/<sf>` deep link (raises
+	/// the window and focuses the surface in one step). IDs are UUIDs.
+	Cmux { workspace: String, surface: String },
 	/// Kitty window: remote-control socket + window id. Both env vars only
 	/// exist when the user enabled `allow_remote_control` + `listen_on`.
 	Kitty { socket: String, window_id: String },
@@ -198,7 +201,7 @@ fn jump_target_from_env<'a>(env: impl Iterator<Item = &'a str>) -> Option<JumpTa
 	for kv in env {
 		if let Some((k, v)) = kv.split_once('=') {
 			if k.starts_with("HERDR_") || k.starts_with("SUPACODE_") || k.starts_with("KITTY_")
-				|| k.starts_with("WEZTERM_")
+				|| k.starts_with("WEZTERM_") || k.starts_with("CMUX_")
 			{
 				vars.insert(k, v);
 			}
@@ -219,6 +222,13 @@ fn jump_target_from_env<'a>(env: impl Iterator<Item = &'a str>) -> Option<JumpTa
 		(get("SUPACODE_WORKTREE_ID"), get("SUPACODE_TAB_ID"), get("SUPACODE_SURFACE_ID"))
 	{
 		return Some(JumpTarget::Supacode { worktree, tab, surface });
+	}
+	// CMUX_TAB_ID / CMUX_PANEL_ID are cmux's own legacy aliases of the two.
+	if let (Some(workspace), Some(surface)) = (
+		get("CMUX_WORKSPACE_ID").or_else(|| get("CMUX_TAB_ID")),
+		get("CMUX_SURFACE_ID").or_else(|| get("CMUX_PANEL_ID")),
+	) {
+		return Some(JumpTarget::Cmux { workspace, surface });
 	}
 	if let (Some(socket), Some(window_id)) = (get("KITTY_LISTEN_ON"), get("KITTY_WINDOW_ID")) {
 		return Some(JumpTarget::Kitty { socket, window_id });
@@ -942,6 +952,15 @@ mod tests {
 		assert_eq!(
 			t(&["KITTY_WINDOW_ID=3", "KITTY_LISTEN_ON=unix:/tmp/mykitty-42"]),
 			Some(JumpTarget::Kitty { socket: "unix:/tmp/mykitty-42".into(), window_id: "3".into() })
+		);
+		assert_eq!(
+			t(&["CMUX_WORKSPACE_ID=AB-12", "CMUX_SURFACE_ID=CD-34", "CMUX_SOCKET_PATH=/s"]),
+			Some(JumpTarget::Cmux { workspace: "AB-12".into(), surface: "CD-34".into() })
+		);
+		// Legacy alias names resolve too.
+		assert_eq!(
+			t(&["CMUX_TAB_ID=AB-12", "CMUX_PANEL_ID=CD-34"]),
+			Some(JumpTarget::Cmux { workspace: "AB-12".into(), surface: "CD-34".into() })
 		);
 		assert_eq!(
 			t(&["WEZTERM_PANE=7", "WEZTERM_UNIX_SOCKET=/tmp/wez.sock"]),

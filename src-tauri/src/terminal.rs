@@ -193,6 +193,23 @@ pub fn focus_supacode(worktree: &str, tab: &str, surface: &str) -> Result<(), Ap
 	run_command(&bin, &[arg("open")])
 }
 
+/// True for a plain hex-and-dashes UUID (cmux workspace/surface ids). Guards
+/// the deep-link URL against anything that isn't an id.
+fn uuid_ok(id: &str) -> bool {
+	!id.is_empty() && id.chars().all(|c| c.is_ascii_hexdigit() || c == '-')
+}
+
+/// Focus a cmux surface via its deep link —
+/// `cmux://workspace/<ws>/surface/<sf>` raises the owning window, selects the
+/// workspace, and focuses the surface in one step (cmux handles activation
+/// itself; no separate `open -a` needed).
+pub fn focus_cmux(workspace: &str, surface: &str) -> Result<(), AppError> {
+	if !uuid_ok(workspace) || !uuid_ok(surface) {
+		return Err(AppError::Message(format!("invalid cmux ids: {workspace} {surface}")));
+	}
+	run_command("open", &[format!("cmux://workspace/{workspace}/surface/{surface}")])
+}
+
 /// Focus a kitty window via its remote-control socket:
 /// `kitten @ --to <socket> focus-window --match id:<window_id>`. Raises the
 /// OS window itself; `open -a kitty` is belt-and-braces for macOS 15+'s

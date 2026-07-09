@@ -136,6 +136,7 @@ equivalent hook system is wired).
   |---|---|---|
   | Herdr | `HERDR_ENV` + `HERDR_PANE_ID` + `HERDR_SOCKET_PATH` | `herdr agent focus <pane>` on its socket, then a best-effort raise of the terminal hosting the attached herdr client |
   | Supacode | `SUPACODE_WORKTREE_ID`/`TAB_ID`/`SURFACE_ID` | supacode CLI: `tab focus` → `surface focus` → `open` |
+  | Cmux | `CMUX_WORKSPACE_ID` + `CMUX_SURFACE_ID` (legacy `CMUX_TAB_ID`/`CMUX_PANEL_ID`) | deep link `open cmux://workspace/<ws>/surface/<sf>` — raises + focuses in one step |
   | Kitty | `KITTY_LISTEN_ON` + `KITTY_WINDOW_ID` | `kitten @ --to <socket> focus-window --match id:<id>` |
   | WezTerm | `WEZTERM_UNIX_SOCKET` + `WEZTERM_PANE` | `wezterm cli activate-pane --pane-id <id>` + `open -a WezTerm` |
   | Ghostty | ancestry (`/Ghostty.app/`) | AppleScript (Ghostty ≥ 1.3): match terminal by `tty` (1.4+) falling back to `working directory` (1.3) |
@@ -171,7 +172,7 @@ equivalent hook system is wired).
 - Hook state is cwd-keyed too: two claude sessions in one folder share it,
   waiting winning over working/idle. Per-session attribution needs a PID in
   the hook payload, which Claude Code doesn't provide.
-- Jump to session covers Herdr, supacode, Kitty, WezTerm, Ghostty,
+- Jump to session covers Herdr, supacode, Cmux, Kitty, WezTerm, Ghostty,
   Terminal.app, and iTerm2. Bare tmux/screen/zellij are the remaining gap.
   Ghostty 1.3 falls back to cwd matching (ambiguous when two terminals share
   a folder); exact tty matching engages on 1.4+. Herdr's host-terminal raise

@@ -657,6 +657,7 @@ fn focus_session(pid: u32, cwd: &str, tty: &str, allow_mux: bool) -> Result<(), 
 		T::Supacode { worktree, tab, surface } => {
 			terminal::focus_supacode(&worktree, &tab, &surface)
 		}
+		T::Cmux { workspace, surface } => terminal::focus_cmux(&workspace, &surface),
 		T::Kitty { socket, window_id } => terminal::focus_kitty(&socket, &window_id),
 		T::WezTerm { socket, pane } => terminal::focus_wezterm(&socket, &pane),
 		T::Ghostty => {
