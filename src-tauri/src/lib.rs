@@ -13,11 +13,16 @@ pub mod supervisor;
 pub mod terminal;
 
 use tauri::{
-	Manager,
+	Emitter, Manager,
 	menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 	WindowEvent,
 };
+
+/// How often the background loop re-checks for updates after the initial launch
+/// check (seconds). Daily. The `update_in_flight` guard keeps a manual check from
+/// overlapping this one.
+const UPDATE_CHECK_INTERVAL_SECS: u64 = 86_400;
 
 /// Reflect the aggregate service status on the tray icon: the buoy's beacon glows
 /// red (any error) or amber (any starting) via colored non-template variants;
@@ -95,6 +100,24 @@ async fn run_update_check(app: &tauri::AppHandle, silent: bool) {
 
 	match updater.check().await {
 		Ok(Some(update)) => {
+			// Cache + broadcast so the popover can show its banner. The event may
+			// fire before the (hidden) webview has mounted its listener, so the
+			// cached copy is the source of truth the frontend pulls on mount.
+			let info = model::UpdateInfo {
+				version: update.version.clone(),
+				current_version: update.current_version.clone(),
+				notes: update.body.clone().unwrap_or_default(),
+			};
+			*app.state::<state::AppState>().pending_update.lock().unwrap() = Some(info.clone());
+			let _ = app.emit("update_available", info);
+
+			// Silent (launch + daily) checks defer entirely to the in-app banner.
+			if silent {
+				return;
+			}
+			// Manual check keeps a native confirm dialog for instant action. Version
+			// only — native dialogs render multiline release notes badly; the banner
+			// owns the changelog.
 			let accepted = app
 				.dialog()
 				.message(format!(
@@ -111,7 +134,10 @@ async fn run_update_check(app: &tauri::AppHandle, silent: bool) {
 				return;
 			}
 			match update.download_and_install(|_, _| {}, || {}).await {
-				Ok(_) => app.restart(),
+				Ok(_) => {
+					*app.state::<state::AppState>().pending_update.lock().unwrap() = None;
+					app.restart();
+				}
 				Err(e) => {
 					app.dialog()
 						.message(format!("The update failed to install: {e}"))
@@ -122,6 +148,8 @@ async fn run_update_check(app: &tauri::AppHandle, silent: bool) {
 			}
 		}
 		Ok(None) => {
+			// Remote no longer advertises a newer release — drop any stale banner.
+			*app.state::<state::AppState>().pending_update.lock().unwrap() = None;
 			if !silent {
 				app.dialog()
 					.message("You're running the latest version of Quay.")
@@ -139,6 +167,66 @@ async fn run_update_check(app: &tauri::AppHandle, silent: bool) {
 			}
 		}
 	}
+}
+
+/// The update the last check found, if any. The popover calls this on mount to
+/// recover a pending update whose `update_available` event it may have missed (the
+/// menubar app starts hidden, so the webview can mount after the launch check emits).
+#[tauri::command]
+fn get_pending_update(state: tauri::State<state::AppState>) -> Option<model::UpdateInfo> {
+	state.pending_update.lock().unwrap().clone()
+}
+
+/// Download and install the pending update, then restart. Triggered by the banner's
+/// Install button. Re-checks rather than caching the (non-`Send`) `Update` handle
+/// across the IPC boundary — one extra round-trip on an explicit click. Returns an
+/// error string the banner surfaces; on success the process restarts and never
+/// returns. `Ok(())` with no restart means the remote is no longer newer (banner
+/// should clear).
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+	use std::sync::atomic::Ordering;
+	use tauri_plugin_updater::UpdaterExt;
+
+	// Share the `update_in_flight` guard with the check flows so an install can't
+	// race a concurrent launch/daily/manual check.
+	{
+		let st = app.state::<state::AppState>();
+		if st
+			.update_in_flight
+			.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+			.is_err()
+		{
+			return Err("An update check is already running. Try again in a moment.".into());
+		}
+	}
+
+	let result = async {
+		let updater = app
+			.updater()
+			.map_err(|e| format!("Couldn't start the updater: {e}"))?;
+		match updater.check().await {
+			Ok(Some(update)) => {
+				update
+					.download_and_install(|_, _| {}, || {})
+					.await
+					.map_err(|e| format!("The update failed to install: {e}"))?;
+				*app.state::<state::AppState>().pending_update.lock().unwrap() = None;
+				app.restart();
+			}
+			Ok(None) => {
+				*app.state::<state::AppState>().pending_update.lock().unwrap() = None;
+				Ok(())
+			}
+			Err(e) => Err(format!("Couldn't check for updates: {e}")),
+		}
+	}
+	.await;
+
+	app.state::<state::AppState>()
+		.update_in_flight
+		.store(false, Ordering::Release);
+	result
 }
 
 /// Re-pin the popover under the tray icon.
@@ -232,6 +320,8 @@ pub fn run() {
 			commands::reveal_in_finder,
 			commands::reveal_path,
 			resize_popover,
+			get_pending_update,
+			install_update,
 		])
 		.setup(|app| {
 			// Menubar-only: hide the dock icon (and Cmd-Tab entry). Accessory keeps
@@ -394,13 +484,19 @@ pub fn run() {
 			// would stay monochrome until the next actual transition.
 			update_tray_icon(app.handle());
 
-			// Silent update check shortly after launch — delayed a few seconds so the
-			// tray + popover are settled before any "update available" dialog appears.
+			// Silent update checks: one shortly after launch (delayed so the tray +
+			// popover are settled), then daily for the app's lifetime. Silent, so a
+			// found update surfaces only via the in-app banner. Clones the app handle
+			// only; the thread ends with the process on quit.
 			{
 				let handle = app.handle().clone();
 				std::thread::spawn(move || {
 					std::thread::sleep(std::time::Duration::from_secs(3));
-					tauri::async_runtime::spawn(check_for_updates(handle, true));
+					tauri::async_runtime::spawn(check_for_updates(handle.clone(), true));
+					loop {
+						std::thread::sleep(std::time::Duration::from_secs(UPDATE_CHECK_INTERVAL_SECS));
+						tauri::async_runtime::spawn(check_for_updates(handle.clone(), true));
+					}
 				});
 			}
 

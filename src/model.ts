@@ -156,6 +156,16 @@ export interface ItemStatus {
 	lastError: string | null;
 }
 
+/**
+ * An available update the backend found. Mirrors Rust `UpdateInfo`. `notes` is the
+ * release changelog (empty when the release has none) and is rendered as plain text.
+ */
+export interface UpdateInfo {
+	version: string;
+	currentVersion: string;
+	notes: string;
+}
+
 /** Suggested item config returned by the detect_folder_cmd backend command. Mirrors Rust `DetectResult`. */
 export interface DetectResult {
 	name: string;

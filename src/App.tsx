@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { detectFolder, getItems, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPortsDiscovered, onStatusChanged } from './ipc';
-import { blankItem, type DiscoveredAgent, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from './model';
+import { detectFolder, getItems, getPendingUpdate, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPortsDiscovered, onStatusChanged, onUpdateAvailable } from './ipc';
+import { blankItem, type DiscoveredAgent, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status, type UpdateInfo } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
 import { SettingsDialog } from './components/SettingsDialog';
@@ -41,6 +41,24 @@ export function App(): React.JSX.Element {
 	// or the item being edited; `settingsOpen` toggles the settings dialog.
 	const [editing, setEditing] = useState<ManagedItem | null | undefined>(undefined);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+
+	// A pending app update to show as a banner. `dismissedVersionRef` remembers the
+	// version the user dismissed so the daily re-check (which re-emits the same
+	// version) doesn't resurrect the banner this session; a restart re-shows it.
+	const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
+	const dismissedVersionRef = useRef<string | null>(null);
+
+	const receiveUpdate = useCallback((u: UpdateInfo) => {
+		if (u.version === dismissedVersionRef.current) return;
+		setUpdateInfo(u);
+	}, []);
+
+	const dismissUpdate = useCallback(() => {
+		setUpdateInfo((cur) => {
+			if (cur) dismissedVersionRef.current = cur.version;
+			return null;
+		});
+	}, []);
 
 	useSystemTheme();
 
@@ -125,6 +143,13 @@ export function App(): React.JSX.Element {
 		void onPortsDiscovered(setDiscovered).then(track);
 		void onAgentsDiscovered(setAgents).then(track);
 
+		// Update banner: subscribe to live events, and backfill any update whose
+		// event fired before this listener mounted (the app starts hidden).
+		void onUpdateAvailable(receiveUpdate).then(track);
+		void getPendingUpdate().then((u) => {
+			if (!cancelled && u) receiveUpdate(u);
+		});
+
 		// Seed current statuses once. `status_changed` only fires on change, so a
 		// status set by the backend's startup poll (before this listener attached)
 		// would never arrive otherwise. Gap-fill only: any id already updated by a
@@ -149,7 +174,7 @@ export function App(): React.JSX.Element {
 			cancelled = true;
 			for (const fn of unlisteners) fn();
 		};
-	}, [refresh, reloadSettings]);
+	}, [refresh, reloadSettings, receiveUpdate]);
 
 	// Recomputed only when items change, not on every metrics/radar tick.
 	const groups = useMemo(
@@ -174,6 +199,8 @@ export function App(): React.JSX.Element {
 				onDismissDiscovered={dismissDiscovered}
 				onDismissAgent={dismissAgent}
 				onSettings={() => setSettingsOpen(true)}
+				updateInfo={updateInfo}
+				onDismissUpdate={dismissUpdate}
 			/>
 			<ServiceForm
 				open={editing !== undefined}

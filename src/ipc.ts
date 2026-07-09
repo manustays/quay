@@ -8,6 +8,7 @@ import type {
 	ItemStatus,
 	ManagedItem,
 	Settings,
+	UpdateInfo,
 } from './model';
 
 export const getItems = () => invoke<ManagedItem[]>('get_items');
@@ -64,6 +65,27 @@ export const startDockerDaemon = () => invoke<boolean>('start_docker_daemon');
 export function onStatusChanged(cb: (s: ItemStatus) => void): Promise<UnlistenFn> {
 	return listen<ItemStatus>('status_changed', (e) => cb(e.payload));
 }
+
+/**
+ * Subscribe to `update_available` events. Fired when a background check finds a
+ * newer release. The event can precede the webview mounting this listener (the
+ * menubar app starts hidden), so also call {@link getPendingUpdate} on mount to
+ * recover an update whose event was missed. Returns an unlisten function.
+ */
+export function onUpdateAvailable(cb: (u: UpdateInfo) => void): Promise<UnlistenFn> {
+	return listen<UpdateInfo>('update_available', (e) => cb(e.payload));
+}
+
+/** The update the last backend check found, or null. Query on mount to backfill a missed event. */
+export const getPendingUpdate = () => invoke<UpdateInfo | null>('get_pending_update');
+
+/**
+ * Download + install the pending update, then restart the app. Resolves only if the
+ * remote is no longer newer (banner should clear); on success the app restarts and
+ * this never resolves. Rejects with an error string on failure or if a check is
+ * already running.
+ */
+export const installUpdate = () => invoke<void>('install_update');
 
 /**
  * Subscribe to backend metrics events. The callback receives the full set of

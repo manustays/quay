@@ -9,7 +9,7 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
-import { aggregateGroupMetrics, aggregateGroupStatus, groupAgentsByCwd, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status } from '../model';
+import { aggregateGroupMetrics, aggregateGroupStatus, groupAgentsByCwd, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status, type UpdateInfo } from '../model';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { reorder, startItem, stopAll, stopItem } from '../ipc';
@@ -18,6 +18,7 @@ import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
 import { IconAction, MetricsText } from './RowBits';
 import { ServiceRow, STATUS_ACCENT } from './ServiceRow';
+import { UpdateBanner } from './UpdateBanner';
 
 interface PopupProps {
 	items: ManagedItem[];
@@ -38,6 +39,10 @@ interface PopupProps {
 	/** Optimistically remove an agent row after a successful kill/ignore. */
 	onDismissAgent: (entry: DiscoveredAgent) => void;
 	onSettings: () => void;
+	/** A pending app update to surface as a banner, or null when none. */
+	updateInfo: UpdateInfo | null;
+	/** Dismiss the update banner (per session). */
+	onDismissUpdate: () => void;
 }
 
 // Grow-to-content bounds. Floor is the tauri.conf default so the small-list
@@ -99,6 +104,8 @@ export function Popup({
 	onDismissDiscovered,
 	onDismissAgent,
 	onSettings,
+	updateInfo,
+	onDismissUpdate,
 }: PopupProps): React.JSX.Element {
 	const shellRef = useRef<HTMLDivElement>(null);
 	useAutoHeight(shellRef);
@@ -369,6 +376,8 @@ export function Popup({
 					<TooltipContent>Stop all</TooltipContent>
 				</Tooltip>
 			</header>
+
+			{updateInfo && <UpdateBanner info={updateInfo} onDismiss={onDismissUpdate} />}
 
 			{/* List body */}
 			<div className="scroll-area min-h-0 flex-1 px-2 pb-1">

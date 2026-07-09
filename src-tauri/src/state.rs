@@ -1,4 +1,4 @@
-use crate::model::{AppConfig, Status};
+use crate::model::{AppConfig, Status, UpdateInfo};
 use crate::supervisor::Running;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,6 +23,11 @@ pub struct AppState {
 	/// launch check and the "Check for Updates…" tray item against overlapping
 	/// runs (duplicate dialogs, racing downloads). See `lib.rs::check_for_updates`.
 	pub update_in_flight: AtomicBool,
+	/// The latest update the backend found, if any. Set when a check finds a newer
+	/// release; the `update_available` event may be emitted before the popover
+	/// webview has mounted its listener (menubar app starts hidden), so the frontend
+	/// also pulls this on mount via `get_pending_update`.
+	pub pending_update: Mutex<Option<UpdateInfo>>,
 }
 
 impl AppState {

@@ -114,6 +114,17 @@ pub struct AppConfig {
 	#[serde(default)] pub items: Vec<ManagedItem>,
 }
 
+/// Available-update payload pushed to the frontend (and cached in `AppState` so a
+/// popover that mounts after the check can pull the pending update on demand).
+/// `notes` is empty when the release carries no changelog; the frontend renders it
+/// as plain text (never markdown/HTML).
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateInfo {
+	pub version: String,
+	#[serde(rename = "currentVersion")] pub current_version: String,
+	pub notes: String,
+}
+
 /// Status event payload pushed to the frontend.
 #[derive(Debug, Clone, Serialize)]
 pub struct ItemStatus {
