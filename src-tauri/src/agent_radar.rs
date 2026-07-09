@@ -2,8 +2,9 @@
 //!
 //! An interactive session = an agent binary (claude / codex / opencode / pi)
 //! with an attached tty. sysinfo does not expose the controlling tty on macOS,
-//! so each pass starts with one `ps -axo pid=,tty=` to collect tty-attached
-//! PIDs, then resolves argv/cwd/cpu/mem for just those via two targeted
+//! so each pass starts with one `ps -axo pid=,ppid=,tty=,comm=` to collect
+//! tty-attached PIDs (plus ancestry for the host-terminal check backing
+//! jump-to-session), then resolves argv/cwd/cpu/mem for just those via two targeted
 //! sysinfo refreshes (`MINIMUM_CPU_UPDATE_INTERVAL` apart, so CPU% is a valid
 //! delta). Runs inside the port-radar loop (scanner.rs): 5 s cadence, only
 //! while the popover is visible; snapshots go out on `agents_discovered`.
@@ -11,7 +12,7 @@
 use crate::detect;
 use crate::state::AppState;
 use serde::Serialize;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use sysinfo::{
@@ -44,9 +45,16 @@ pub struct DiscoveredAgent {
 	// the upgrade if the numbers look too small.
 	pub cpu_percent: f32,
 	pub memory_bytes: u64,
-	/// "active" (recent session-log write or busy CPU) or "idle" — a
-	/// recent-activity signal, not proof of work.
+	/// "waiting" (hook-reported: session blocked on the user — claude only),
+	/// "active" (recent session-log write or busy CPU), or "idle". Active/idle
+	/// is a recent-activity signal, not proof of work.
 	pub state: &'static str,
+	/// Controlling tty (e.g. "ttys002") — jump-to-session's window lookup key.
+	pub tty: String,
+	/// True when the configured/known terminal can be focused by tty via
+	/// AppleScript (Terminal.app / iTerm). GPU terminals (Kitty, Ghostty…)
+	/// have a tty too but no scriptable lookup, so the UI hides Jump for them.
+	pub jump_supported: bool,
 }
 
 /// How a session's active/idle state (and name, where possible) is derived.
@@ -120,25 +128,167 @@ fn agent_from_argv(argv: &[String]) -> Option<&'static AgentDef> {
 	Some(def)
 }
 
-/// Parse `ps -axo pid=,tty=` output into the set of tty-attached PIDs.
-/// A tty of `??` (daemons, helpers, .app bundles) is dropped. Pure.
-fn parse_tty_pids(out: &str) -> HashSet<u32> {
+/// One row of the per-pass `ps` snapshot.
+struct PsProc {
+	ppid: u32,
+	/// Controlling tty ("ttys002"); `None` for `??` (daemons, .app bundles).
+	tty: Option<String>,
+	/// Executable path/name as reported by `comm` — used for the host-terminal
+	/// ancestry walk (e.g. ".../iTerm.app/Contents/MacOS/iTerm2").
+	comm: String,
+}
+
+/// Parse `ps -axo pid=,ppid=,tty=,comm=` output. Pure.
+fn parse_ps_snapshot(out: &str) -> HashMap<u32, PsProc> {
 	out.lines()
 		.filter_map(|line| {
 			let mut cols = line.split_whitespace();
 			let pid = cols.next()?.parse().ok()?;
-			cols.next()?.starts_with("tty").then_some(pid)
+			let ppid = cols.next()?.parse().ok()?;
+			let tty = cols.next()?;
+			let tty = tty.starts_with("tty").then(|| tty.to_string());
+			// comm may contain spaces (paths); rejoin the remainder.
+			let comm = cols.collect::<Vec<_>>().join(" ");
+			Some((pid, PsProc { ppid, tty, comm }))
 		})
 		.collect()
 }
 
-/// tty-attached PIDs right now — one `ps` per scan pass.
-fn tty_pids() -> HashSet<u32> {
+/// Full process snapshot — one `ps` per scan pass.
+fn ps_snapshot() -> HashMap<u32, PsProc> {
 	std::process::Command::new("ps")
-		.args(["-axo", "pid=,tty="])
+		.args(["-axo", "pid=,ppid=,tty=,comm="])
 		.output()
-		.map(|o| parse_tty_pids(&String::from_utf8_lossy(&o.stdout)))
+		.map(|o| parse_ps_snapshot(&String::from_utf8_lossy(&o.stdout)))
 		.unwrap_or_default()
+}
+
+/// How to focus the window/tab/pane hosting a session — resolved from the
+/// session's own environment (multiplexers and env-labelled terminals) or,
+/// failing that, from its process ancestry (AppleScript-able terminal apps).
+#[derive(Debug, Clone, PartialEq)]
+pub enum JumpTarget {
+	/// Herdr multiplexer pane: `herdr agent focus <pane>` against its socket,
+	/// falling back to workspace+tab focus when herdr doesn't recognize the
+	/// pane as an agent. The host terminal window is raised separately (see
+	/// `jump_to_session`).
+	Herdr { socket: String, pane: String, workspace: String, tab: String },
+	/// Supacode surface: exact CLI coordinates.
+	Supacode { worktree: String, tab: String, surface: String },
+	/// Kitty window: remote-control socket + window id. Both env vars only
+	/// exist when the user enabled `allow_remote_control` + `listen_on`.
+	Kitty { socket: String, window_id: String },
+	/// WezTerm pane: `wezterm cli activate-pane` against its socket.
+	WezTerm { socket: String, pane: String },
+	/// Ghostty ≥1.3: AppleScript match by tty (1.4+) or cwd (1.3 fallback).
+	/// No per-surface env id exists, hence no fields.
+	Ghostty,
+	/// Terminal.app / iTerm2: AppleScript window lookup by controlling tty.
+	ScriptableTty,
+}
+
+/// Resolve a jump target from an environ list of `K=V` strings. Pure.
+///
+/// Priority: Herdr first — a multiplexer pane's env can carry stale host
+/// terminal vars (panes survive detach/reattach into a different terminal),
+/// so the innermost layer must win. Kitty/WezTerm need both their vars: an id
+/// without its socket is unreachable.
+fn jump_target_from_env<'a>(env: impl Iterator<Item = &'a str>) -> Option<JumpTarget> {
+	let mut vars: HashMap<&str, &str> = HashMap::new();
+	for kv in env {
+		if let Some((k, v)) = kv.split_once('=') {
+			if k.starts_with("HERDR_") || k.starts_with("SUPACODE_") || k.starts_with("KITTY_")
+				|| k.starts_with("WEZTERM_")
+			{
+				vars.insert(k, v);
+			}
+		}
+	}
+	let get = |k: &str| vars.get(k).map(|v| v.to_string());
+	if vars.get("HERDR_ENV") == Some(&"1") {
+		if let (Some(socket), Some(pane), Some(workspace), Some(tab)) = (
+			get("HERDR_SOCKET_PATH"),
+			get("HERDR_PANE_ID"),
+			get("HERDR_WORKSPACE_ID"),
+			get("HERDR_TAB_ID"),
+		) {
+			return Some(JumpTarget::Herdr { socket, pane, workspace, tab });
+		}
+	}
+	if let (Some(worktree), Some(tab), Some(surface)) =
+		(get("SUPACODE_WORKTREE_ID"), get("SUPACODE_TAB_ID"), get("SUPACODE_SURFACE_ID"))
+	{
+		return Some(JumpTarget::Supacode { worktree, tab, surface });
+	}
+	if let (Some(socket), Some(window_id)) = (get("KITTY_LISTEN_ON"), get("KITTY_WINDOW_ID")) {
+		return Some(JumpTarget::Kitty { socket, window_id });
+	}
+	if let (Some(socket), Some(pane)) = (get("WEZTERM_UNIX_SOCKET"), get("WEZTERM_PANE")) {
+		return Some(JumpTarget::WezTerm { socket, pane });
+	}
+	None
+}
+
+/// Hosts focusable via process ancestry, matched by a path marker in an
+/// ancestor's `comm`: AppleScript by tty (Terminal.app/iTerm) or Ghostty's
+/// AppleScript dictionary.
+// ponytail: bare tmux/screen/zellij panes stay unsupported — their ancestry
+// dead-ends at the mux server; per-mux adapters are the upgrade path.
+const ANCESTRY_HOSTS: &[(&str, JumpTarget)] = &[
+	("/iTerm.app/", JumpTarget::ScriptableTty),
+	("/Terminal.app/", JumpTarget::ScriptableTty),
+	("/Ghostty.app/", JumpTarget::Ghostty),
+];
+
+/// Walk `pid`'s parent chain looking for a focusable host terminal.
+/// Bounded so a cyclic/garbled table can't loop. Pure.
+fn ancestry_target(pid: u32, table: &HashMap<u32, PsProc>) -> Option<JumpTarget> {
+	let mut cur = pid;
+	for _ in 0..20 {
+		let p = table.get(&cur)?;
+		if let Some((_, t)) = ANCESTRY_HOSTS.iter().find(|(m, _)| p.comm.contains(m)) {
+			return Some(t.clone());
+		}
+		if p.ppid <= 1 {
+			return None;
+		}
+		cur = p.ppid;
+	}
+	None
+}
+
+/// Jump target for a live PID, resolved fresh (env via sysinfo, ancestry via
+/// one `ps` snapshot) — jump-to-session's click-time lookup, so a stale radar
+/// row can't dispatch against recycled coordinates.
+pub fn jump_target_for(pid: u32) -> Option<JumpTarget> {
+	let mut sys = System::new();
+	let sys_pid = Pid::from_u32(pid);
+	sys.refresh_processes_specifics(
+		ProcessesToUpdate::Some(&[sys_pid]),
+		true,
+		ProcessRefreshKind::nothing().with_environ(UpdateKind::Always),
+	);
+	let proc_ = sys.process(sys_pid)?;
+	jump_target_from_env(proc_.environ().iter().filter_map(|s| s.to_str()))
+		.or_else(|| ancestry_target(pid, &ps_snapshot()))
+}
+
+/// The attached herdr *client* process (tty-attached `herdr` binary) — a herdr
+/// pane's own ancestry leads to the detachable herdr server, never the host
+/// terminal, so raising the host means finding the client and focusing *it*.
+// ponytail: first tty-attached herdr wins; multiple concurrent herdr clients
+// would need an env socket match to disambiguate.
+pub fn herdr_client_pid() -> Option<u32> {
+	let ps = ps_snapshot();
+	let mut pids: Vec<u32> = ps
+		.iter()
+		.filter(|(_, p)| {
+			p.tty.is_some() && p.comm.rsplit('/').next().unwrap_or(&p.comm) == "herdr"
+		})
+		.map(|(&pid, _)| pid)
+		.collect();
+	pids.sort_unstable();
+	pids.first().copied()
 }
 
 /// Claude Code project-dir slug: every non-alphanumeric char → `-`.
@@ -366,6 +516,97 @@ fn is_active(log_mtime: Option<SystemTime>, cpu_percent: f32, now: SystemTime) -
 	recent_write || cpu_percent > 10.0
 }
 
+/// One hook-reported session state, written by `quay-hook` (see
+/// `src/bin/quay-hook.rs`): the event's cwd, the mapped state string, and the
+/// event time as unix seconds.
+struct HookState {
+	state: String,
+	ts: SystemTime,
+}
+
+/// Grace before a hook-state file whose cwd has no live session is deleted —
+/// long enough to ride out a transient cwd-resolution miss, short enough that
+/// crashed-while-waiting sessions don't leave junk.
+const HOOK_PRUNE_GRACE_SECS: u64 = 600;
+
+/// Read `agent-state/*.json` into cwd → strongest state. Precedence per cwd:
+/// waiting > working > idle (matches the folder-clubbing UX — one amber member
+/// makes the folder need you). Files whose cwd has no live claude session and
+/// whose event is older than the grace window are pruned in the same walk.
+fn hook_states(dir: &Path, live_cwds: &[&str], now: SystemTime) -> HashMap<String, HookState> {
+	let mut out: HashMap<String, HookState> = HashMap::new();
+	let Ok(rd) = std::fs::read_dir(dir) else { return out };
+	let rank = |s: &str| match s {
+		"waiting" => 2,
+		"working" => 1,
+		_ => 0,
+	};
+	for entry in rd.flatten() {
+		let path = entry.path();
+		if path.extension().is_none_or(|x| x != "json") {
+			continue;
+		}
+		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
+			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+			Some((v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+		});
+		let Some((cwd, state, ts)) = parsed else {
+			let _ = std::fs::remove_file(&path); // corrupt/partial: drop it
+			continue;
+		};
+		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
+		let age = now.duration_since(ts).unwrap_or_default().as_secs();
+		if !live_cwds.contains(&cwd.as_str()) {
+			if age > HOOK_PRUNE_GRACE_SECS {
+				let _ = std::fs::remove_file(&path);
+			}
+			continue;
+		}
+		let stronger = out
+			.get(&cwd)
+			.is_none_or(|cur| rank(&state) > rank(&cur.state) || (rank(&state) == rank(&cur.state) && ts > cur.ts));
+		if stronger {
+			out.insert(cwd, HookState { state, ts });
+		}
+	}
+	out
+}
+
+/// Three-way session state. The hook's "waiting" wins — unless the session log
+/// was written *after* the hook event (the session resumed but no clearing
+/// hook has landed yet, e.g. hooks were unregistered mid-session); then the
+/// mtime/CPU heuristic decides active vs idle as before. Pure.
+// ponytail: hook state is cwd-keyed like everything else here; two claude
+// sessions in one folder share it (waiting wins per hook_states precedence).
+fn resolve_state(
+	hook: Option<&HookState>,
+	log_mtime: Option<SystemTime>,
+	cpu_percent: f32,
+	now: SystemTime,
+) -> &'static str {
+	if let Some(h) = hook {
+		if h.state == "waiting" {
+			let resumed = log_mtime
+				.is_some_and(|m| m > h.ts + std::time::Duration::from_secs(2));
+			if !resumed {
+				return "waiting";
+			}
+		}
+	}
+	if is_active(log_mtime, cpu_percent, now) { "active" } else { "idle" }
+}
+
+/// `pid`'s controlling tty right now (e.g. "ttys002") — jump-to-session's
+/// click-time revalidation, so a recycled PID can't focus someone else's window.
+pub fn current_tty(pid: u32) -> Option<String> {
+	let out = std::process::Command::new("ps")
+		.args(["-o", "tty=", "-p", &pid.to_string()])
+		.output()
+		.ok()?;
+	let tty = String::from_utf8_lossy(&out.stdout).trim().to_string();
+	tty.starts_with("tty").then_some(tty)
+}
+
 /// True when `pid` currently is an `agent` session in `cwd` — the kill
 /// command's revalidation guard, so a stale row (session exited, PID reused —
 /// even by the same binary in another folder) can't kill an unrelated process.
@@ -391,7 +632,11 @@ pub fn scan(
 	app: &AppHandle,
 	codex_meta: &mut HashMap<PathBuf, Option<(String, String)>>,
 ) -> Vec<DiscoveredAgent> {
-	let tty = tty_pids();
+	let ps = ps_snapshot();
+	let tty: HashMap<u32, &str> = ps
+		.iter()
+		.filter_map(|(&pid, p)| Some((pid, p.tty.as_deref()?)))
+		.collect();
 	if tty.is_empty() {
 		return Vec::new();
 	}
@@ -405,10 +650,11 @@ pub fn scan(
 	};
 
 	let mut sys = System::new();
-	let sys_pids: Vec<Pid> = tty.iter().map(|&p| Pid::from_u32(p)).collect();
+	let sys_pids: Vec<Pid> = tty.keys().map(|&p| Pid::from_u32(p)).collect();
 	let refresh = ProcessRefreshKind::nothing()
 		.with_cmd(UpdateKind::Always)
 		.with_cwd(UpdateKind::Always)
+		.with_environ(UpdateKind::Always) // supacode jump coordinates
 		.with_cpu()
 		.with_memory();
 	sys.refresh_processes_specifics(ProcessesToUpdate::Some(&sys_pids), true, refresh);
@@ -442,6 +688,18 @@ pub fn scan(
 	let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
 	let now = SystemTime::now();
 
+	// Hook-reported states (quay-hook, claude only today) — read once per pass;
+	// same walk prunes files for sessions that are gone.
+	let claude_cwds: Vec<&str> = candidates
+		.iter()
+		.filter(|(_, d, _)| d.kind == "claude")
+		.map(|(_, _, cwd)| cwd.as_str())
+		.collect();
+	let hooks = {
+		let dir = app.state::<AppState>().dir.join("agent-state");
+		hook_states(&dir, &claude_cwds, now)
+	};
+
 	// Codex rollout inventory + name index, built once per pass and only when
 	// a codex session is actually on screen. The index is re-read every pass —
 	// thread names get (re)generated over time, so caching it would go stale.
@@ -465,6 +723,12 @@ pub fn scan(
 			// a handful of agents × a few small manifest reads every 5 s.
 			let name = detect::name_from_dir(Path::new(&cwd));
 			let stack = detect::stack_from_dir(Path::new(&cwd)).map(str::to_string);
+			let state = resolve_state(
+				(def.kind == "claude").then(|| hooks.get(&cwd)).flatten(),
+				session.mtime,
+				cpu_percent,
+				now,
+			);
 			Some(DiscoveredAgent {
 				pid,
 				agent: def.kind,
@@ -475,7 +739,12 @@ pub fn scan(
 				uptime_sec: proc_.run_time(),
 				cpu_percent,
 				memory_bytes: proc_.memory(),
-				state: if is_active(session.mtime, cpu_percent, now) { "active" } else { "idle" },
+				state,
+				tty: tty.get(&pid).copied().unwrap_or_default().to_string(),
+				jump_supported: jump_target_from_env(
+					proc_.environ().iter().filter_map(|s| s.to_str()),
+				)
+				.is_some() || ancestry_target(pid, &ps).is_some(),
 			})
 		})
 		.collect();
@@ -540,9 +809,39 @@ mod tests {
 	}
 
 	#[test]
-	fn parse_tty_pids_keeps_only_tty_attached() {
-		assert_eq!(parse_tty_pids("123 ttys002\n456 ??\n789 ttys013\n"), HashSet::from([123, 789]));
-		assert_eq!(parse_tty_pids("garbage line\n"), HashSet::new());
+	fn parse_ps_snapshot_keeps_tty_and_ancestry() {
+		let out = concat!(
+			"1 0 ?? /sbin/launchd\n",
+			"123 90 ttys002 /Users/x/.local/bin/claude\n",
+			"456 1 ?? /usr/libexec/somehelper\n",
+			"90 80 ttys002 -zsh\n",
+			"80 1 ?? /Applications/iTerm.app/Contents/MacOS/iTerm2\n",
+			"garbage line\n",
+		);
+		let t = parse_ps_snapshot(out);
+		assert_eq!(t.len(), 5);
+		assert_eq!(t[&123].tty.as_deref(), Some("ttys002"));
+		assert_eq!(t[&123].ppid, 90);
+		assert_eq!(t[&456].tty, None);
+		assert!(t[&80].comm.contains("/iTerm.app/"));
+	}
+
+	#[test]
+	fn ancestry_target_walks_parent_chain() {
+		let out = concat!(
+			"123 90 ttys002 claude\n",
+			"90 80 ttys002 -zsh\n",
+			"80 1 ?? /Applications/iTerm.app/Contents/MacOS/iTerm2\n",
+			"223 190 ttys003 claude\n",
+			"190 180 ttys003 -zsh\n",
+			"180 1 ?? /Applications/Ghostty.app/Contents/MacOS/ghostty\n",
+			"323 1 ttys004 claude\n", // orphaned (tmux-style): no terminal ancestor
+		);
+		let t = parse_ps_snapshot(out);
+		assert_eq!(ancestry_target(123, &t), Some(JumpTarget::ScriptableTty)); // iTerm
+		assert_eq!(ancestry_target(223, &t), Some(JumpTarget::Ghostty));
+		assert_eq!(ancestry_target(323, &t), None); // dead-ends at launchd
+		assert_eq!(ancestry_target(999, &t), None); // unknown pid
 	}
 
 	#[test]
@@ -607,6 +906,126 @@ mod tests {
 		assert_eq!(thread_name_for(index, "a").as_deref(), Some("new name"));
 		assert_eq!(thread_name_for(index, "b").as_deref(), Some("other"));
 		assert_eq!(thread_name_for(index, "missing"), None);
+	}
+
+	#[test]
+	fn jump_target_from_env_resolves_each_host() {
+		let t = |env: &[&str]| jump_target_from_env(env.iter().copied());
+		assert_eq!(
+			t(&[
+				"PATH=/usr/bin",
+				"SUPACODE_WORKTREE_ID=%2Fx%2F",
+				"SUPACODE_TAB_ID=TAB",
+				"SUPACODE_SURFACE_ID=SUR",
+			]),
+			Some(JumpTarget::Supacode {
+				worktree: "%2Fx%2F".into(),
+				tab: "TAB".into(),
+				surface: "SUR".into(),
+			})
+		);
+		assert_eq!(
+			t(&[
+				"HERDR_ENV=1",
+				"HERDR_SOCKET_PATH=/s/herdr.sock",
+				"HERDR_PANE_ID=w1:p2",
+				"HERDR_WORKSPACE_ID=w1",
+				"HERDR_TAB_ID=w1:t1",
+			]),
+			Some(JumpTarget::Herdr {
+				socket: "/s/herdr.sock".into(),
+				pane: "w1:p2".into(),
+				workspace: "w1".into(),
+				tab: "w1:t1".into(),
+			})
+		);
+		assert_eq!(
+			t(&["KITTY_WINDOW_ID=3", "KITTY_LISTEN_ON=unix:/tmp/mykitty-42"]),
+			Some(JumpTarget::Kitty { socket: "unix:/tmp/mykitty-42".into(), window_id: "3".into() })
+		);
+		assert_eq!(
+			t(&["WEZTERM_PANE=7", "WEZTERM_UNIX_SOCKET=/tmp/wez.sock"]),
+			Some(JumpTarget::WezTerm { socket: "/tmp/wez.sock".into(), pane: "7".into() })
+		);
+	}
+
+	#[test]
+	fn jump_target_from_env_priority_and_missing_vars() {
+		let t = |env: &[&str]| jump_target_from_env(env.iter().copied());
+		// A herdr pane created inside kitty carries both — innermost (herdr) wins.
+		assert!(matches!(
+			t(&[
+				"KITTY_WINDOW_ID=3",
+				"KITTY_LISTEN_ON=unix:/tmp/k",
+				"HERDR_ENV=1",
+				"HERDR_SOCKET_PATH=/s.sock",
+				"HERDR_PANE_ID=w1:p1",
+				"HERDR_WORKSPACE_ID=w1",
+				"HERDR_TAB_ID=w1:t1",
+			]),
+			Some(JumpTarget::Herdr { .. })
+		));
+		// Kitty id without a remote-control socket is unreachable → None.
+		assert_eq!(t(&["KITTY_WINDOW_ID=3"]), None);
+		// Herdr marker without coordinates → None (not a half-focus).
+		assert_eq!(t(&["HERDR_ENV=1"]), None);
+		// Partial supacode → None.
+		assert_eq!(t(&["SUPACODE_TAB_ID=x"]), None);
+		assert_eq!(t(&[]), None);
+	}
+
+	#[test]
+	fn resolve_state_waiting_wins_unless_log_resumed() {
+		let now = SystemTime::now();
+		let hook_ts = now - std::time::Duration::from_secs(30);
+		let waiting = HookState { state: "waiting".into(), ts: hook_ts };
+		let working = HookState { state: "working".into(), ts: hook_ts };
+		// Waiting holds with no log write, or a write from before the event.
+		assert_eq!(resolve_state(Some(&waiting), None, 0.0, now), "waiting");
+		let before = hook_ts - std::time::Duration::from_secs(10);
+		assert_eq!(resolve_state(Some(&waiting), Some(before), 0.0, now), "waiting");
+		// A log write after the event means the session resumed → heuristic
+		// (5 s old write → active).
+		let after = hook_ts + std::time::Duration::from_secs(25);
+		assert_eq!(resolve_state(Some(&waiting), Some(after), 0.0, now), "active");
+		// Non-waiting hook states defer to the heuristic entirely.
+		assert_eq!(resolve_state(Some(&working), None, 0.0, now), "idle");
+		assert_eq!(resolve_state(None, None, 50.0, now), "active");
+		assert_eq!(resolve_state(None, None, 0.0, now), "idle");
+	}
+
+	#[test]
+	fn hook_states_precedence_pruning_and_corrupt_files() {
+		let d = std::env::temp_dir().join(format!("msm-hook-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&d).unwrap();
+		let now = SystemTime::now();
+		let ts = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+		let write = |name: &str, cwd: &str, state: &str, ts: u64| {
+			std::fs::write(
+				d.join(name),
+				format!("{{\"cwd\":\"{cwd}\",\"state\":\"{state}\",\"ts\":{ts}}}"),
+			)
+			.unwrap();
+		};
+		// Two sessions in one cwd: waiting must win over a newer idle.
+		write("s1.json", "/x/app", "waiting", ts - 60);
+		write("s2.json", "/x/app", "idle", ts);
+		// Live cwd → kept even when the dead-cwd grace has passed.
+		write("s3.json", "/y/live", "working", ts - HOOK_PRUNE_GRACE_SECS - 100);
+		// Dead cwd: young file kept on disk (grace), old file pruned.
+		write("s4.json", "/z/dead-young", "idle", ts);
+		write("s5.json", "/z/dead-old", "idle", ts - HOOK_PRUNE_GRACE_SECS - 100);
+		std::fs::write(d.join("s6.json"), "{ partial garb").unwrap();
+
+		let map = hook_states(&d, &["/x/app", "/y/live"], now);
+		assert_eq!(map["/x/app"].state, "waiting");
+		assert_eq!(map["/y/live"].state, "working");
+		assert!(!map.contains_key("/z/dead-young")); // not live → not in map
+		assert!(d.join("s4.json").exists()); // …but still on disk (grace)
+		assert!(!d.join("s5.json").exists()); // pruned
+		assert!(!d.join("s6.json").exists()); // corrupt → deleted
+		assert!(hook_states(&d.join("missing"), &[], now).is_empty());
+		std::fs::remove_dir_all(&d).ok();
 	}
 
 	#[test]

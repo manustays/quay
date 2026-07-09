@@ -136,6 +136,14 @@ export const ignoreAgent = (agent: string, cwd: string) =>
 export const revealPath = (path: string) => invoke<void>('reveal_path', { path });
 
 /**
+ * Focus the terminal window/tab hosting an agent session. The backend
+ * revalidates pid identity AND that the pid still sits on `tty` before any
+ * AppleScript runs, so a stale row can't focus someone else's window.
+ */
+export const jumpToSession = (pid: number, agent: string, cwd: string, tty: string) =>
+	invoke<void>('jump_to_session', { pid, agent, cwd, tty });
+
+/**
  * Subscribe to agent-radar snapshots. The callback receives the full list of
  * discovered agent sessions per scan pass (only while the popover is open);
  * replace state wholesale so ended sessions drop out. Returns an unlisten fn.

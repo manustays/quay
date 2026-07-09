@@ -66,6 +66,7 @@ describe('model helpers', () => {
 		const agent = (pid: number, cwd: string): DiscoveredAgent => ({
 			pid, agent: 'claude', name: cwd.split('/').pop() ?? cwd, cwd, stack: null,
 			sessionName: null, uptimeSec: 0, cpuPercent: 0, memoryBytes: 0, state: 'idle',
+			tty: 'ttys002', jumpSupported: false,
 		});
 		const [a, b, c, d] = [agent(1, '/x/app'), agent(2, '/y/solo'), agent(3, '/x/app'), agent(4, '/z/lone')];
 		const out = groupAgentsByCwd([a, b, c, d]);

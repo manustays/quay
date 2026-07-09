@@ -7,6 +7,9 @@ license = "MIT"
 repository = "https://github.com/manustays/quay"
 homepage = "https://github.com/manustays/quay"
 edition = "2021"
+# Two binaries exist (quay + the quay-hook helper); `tauri dev`'s bare
+# `cargo run` needs to know the app is the default.
+default-run = "quay"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

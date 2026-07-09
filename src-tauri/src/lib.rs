@@ -317,6 +317,7 @@ pub fn run() {
 			commands::ignore_port,
 			commands::kill_agent,
 			commands::ignore_agent,
+			commands::jump_to_session,
 			commands::reveal_in_finder,
 			commands::reveal_path,
 			resize_popover,

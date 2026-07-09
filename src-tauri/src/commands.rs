@@ -607,6 +607,69 @@ pub fn kill_agent(pid: u32, agent: String, cwd: String, force: bool) -> Result<(
 	Ok(())
 }
 
+/// Focus the terminal window/tab/pane hosting a discovered agent session.
+///
+/// Revalidates the PID against its (agent kind, cwd) identity — the
+/// `kill_agent` guard — then dispatches on the host resolved *fresh* from the
+/// live process (env coordinates / ancestry), so a recycled PID can't focus
+/// someone else's window. On the tty paths the row's tty is revalidated too.
+#[tauri::command]
+pub fn jump_to_session(pid: u32, agent: String, cwd: String, tty: String) -> Result<(), AppError> {
+	if !crate::agent_radar::matches_identity(pid, &agent, &cwd) {
+		return Err(AppError::Message(format!(
+			"process {pid} is no longer a {agent} session in {cwd}"
+		)));
+	}
+	focus_session(pid, &cwd, &tty, true)
+}
+
+/// Dispatch a focus to the session's host. `allow_mux=false` on the herdr
+/// host-raise recursion so a mux can never chain into another mux.
+fn focus_session(pid: u32, cwd: &str, tty: &str, allow_mux: bool) -> Result<(), AppError> {
+	use crate::agent_radar::JumpTarget as T;
+	let target = crate::agent_radar::jump_target_for(pid)
+		.ok_or_else(|| AppError::Message("session's terminal can't be focused".into()))?;
+	// The AppleScript-by-tty hosts act on the tty, so make sure the process is
+	// still on the one the radar row was built from.
+	let check_tty = || -> Result<(), AppError> {
+		if crate::agent_radar::current_tty(pid).as_deref() != Some(tty) {
+			return Err(AppError::Message(format!("process {pid} is no longer on {tty}")));
+		}
+		Ok(())
+	};
+	match target {
+		T::Herdr { socket, pane, workspace, tab } => {
+			if !allow_mux {
+				return Err(AppError::Message("nested multiplexer".into()));
+			}
+			// Focus the pane inside herdr first; then best-effort raise of the
+			// host terminal the attached herdr *client* runs in (the pane's own
+			// ancestry leads to the detachable herdr server, not the terminal).
+			// A detached session has no client — the pane focus alone is still
+			// correct, so the raise failing is not an error.
+			terminal::focus_herdr(&socket, &pane, &workspace, &tab)?;
+			if let Some(client) = crate::agent_radar::herdr_client_pid() {
+				let client_tty = crate::agent_radar::current_tty(client).unwrap_or_default();
+				let _ = focus_session(client, "", &client_tty, false);
+			}
+			Ok(())
+		}
+		T::Supacode { worktree, tab, surface } => {
+			terminal::focus_supacode(&worktree, &tab, &surface)
+		}
+		T::Kitty { socket, window_id } => terminal::focus_kitty(&socket, &window_id),
+		T::WezTerm { socket, pane } => terminal::focus_wezterm(&socket, &pane),
+		T::Ghostty => {
+			check_tty()?;
+			terminal::focus_ghostty(tty, cwd)
+		}
+		T::ScriptableTty => {
+			check_tty()?;
+			terminal::focus_by_tty(tty)
+		}
+	}
+}
+
 /// Hide all sessions of `agent` in `cwd` from the Agents section, persistently.
 /// Un-ignoring happens in Settings (the whole `Settings` is saved back).
 #[tauri::command]

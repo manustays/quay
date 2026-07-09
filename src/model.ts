@@ -94,8 +94,16 @@ export interface DiscoveredAgent {
 	uptimeSec: number;
 	cpuPercent: number;
 	memoryBytes: number;
-	/** "active" = recent session-log write or busy CPU — a recent-activity signal, not proof of work. */
-	state: 'active' | 'idle';
+	/**
+	 * "waiting" = hook-reported, session blocked on the user (claude only);
+	 * "active" = recent session-log write or busy CPU — a recent-activity
+	 * signal, not proof of work; "idle" otherwise.
+	 */
+	state: 'active' | 'idle' | 'waiting';
+	/** Controlling tty (e.g. "ttys002") — jump-to-session's window lookup key. */
+	tty: string;
+	/** True when the hosting terminal can be focused by tty (Terminal.app / iTerm). */
+	jumpSupported: boolean;
 }
 
 /** Two or more agent sessions sharing one project folder, clubbed into a row. */
