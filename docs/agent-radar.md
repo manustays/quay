@@ -41,89 +41,99 @@ best-effort session label:
 Labels are **cwd-keyed**: two sessions in the same folder show the same
 (newest) label.
 
-## What "active" means
+## The three states: working / idle / waiting
 
-The dot is a **recent-activity signal, not proof of work**:
+Each session's dot is one of:
 
-- **Claude Code**: newest `.jsonl` mtime in the session's
-  `~/.claude/projects/<cwd-slug>/` directory < 20 s ago, **or** the process is
-  using > 10 % CPU.
-- **Codex**: same rule via the newest matching
-  `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` (selected by mtime across all
-  date dirs, so long-running sessions started days ago still match).
-- **Pi**: same idea via `~/.pi/agent/sessions/<cwd-slug>/` (slug format
-  inferred from one machine — best effort).
-- **OpenCode**: CPU heuristic only (sessions live in sqlite).
+- **pulsing green — working**: a turn is in progress.
+- **hollow — idle**: waiting for you to type the next prompt, or done.
+- **pulsing amber — waiting on you**: blocked at a permission prompt / an
+  input request. In a clubbed folder row, one waiting member turns the whole
+  folder's pill amber.
 
-Anything else shows **idle** — which includes "waiting at a permission
-prompt", *unless* the waiting-state hooks are installed (below).
+There are two sources for the state, and the better one wins:
 
-## "Waiting on you" (Claude Code, via hooks)
+1. **Hooks (authoritative).** With the radar hooks installed for an agent (one
+   click in Settings — below), the agent reports its own lifecycle, so
+   working/waiting/idle are exact — including "waiting at a permission prompt",
+   which `ps` alone cannot see.
+2. **Heuristic (fallback).** Without hooks, "working" is a **recent-activity
+   signal, not proof of work**: a session-log write < 20 s ago **or** the
+   process using > 10 % CPU; anything else is idle. There is no "waiting"
+   without hooks — a permission prompt reads as idle. Per agent:
+   - **Claude Code**: newest `.jsonl` mtime in `~/.claude/projects/<cwd-slug>/`.
+   - **Codex**: newest matching `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+     (by mtime across all date dirs, so sessions started days ago still match).
+   - **Pi**: newest `.jsonl` under `~/.pi/agent/sessions/<cwd-slug>/` (slug
+     inferred from one machine — best effort).
+   - **OpenCode**: CPU only (sessions live in sqlite).
 
-`ps` can't tell "blocked at a permission prompt" from plain idle — both are
-low CPU and no log writes. With the optional hook helper installed, Claude
-Code itself reports its state and the dot gains a third color: **pulsing
-amber = waiting on you**. In a clubbed folder row, one waiting member turns
-the whole folder's pill amber.
+## Installing the hooks (Settings → Agent radar hooks)
 
-How it works: `quay-hook` (bundled with the repo, `src-tauri/src/bin/`) is
-invoked by Claude Code on lifecycle events and writes one small JSON file per
-session under `~/Library/Application Support/am.abhi.quay/agent-state/`. The
-radar's 5 s poll reads them. Event → state mapping:
+Each agent has an **Install / Remove** button. Install does everything: it
+copies the bundled `quay-hook` helper to an app-managed stable path
+(`~/Library/Application Support/am.abhi.quay/bin/quay-hook`, kept current across
+app updates) and writes that agent's hook config to reference it. No terminal,
+no restart of running sessions. Remove strips only the entries Quay added,
+leaving your own hooks untouched.
 
-| Hook event | State written |
-|---|---|
-| `UserPromptSubmit`, `PostToolUse` | working |
-| `Notification` (permission needed / waiting for input) | waiting |
-| `Stop` | idle |
-| `SessionEnd` | file deleted |
+Each agent's config and event mapping:
 
-The radar only *trusts* the hook's **waiting** — working/idle still come from
-the mtime/CPU heuristic. A session-log write newer than the waiting event
-overrides it (the session resumed), and files for dead sessions are pruned
-after a 10-minute grace. Corrupt/partial files are dropped on read; writes
-are atomic (temp + rename), so a mid-write poll can't read half a file.
-
-### Manual install
-
-1. Build and place the helper somewhere stable:
-
-   ```sh
-   cargo build --release --manifest-path src-tauri/Cargo.toml --bin quay-hook
-   cp src-tauri/target/release/quay-hook ~/.local/bin/quay-hook
-   ```
-
-2. Merge into `~/.claude/settings.json` (applies to all projects, no session
-   restart needed):
-
-   ```json
-   {
-     "hooks": {
-       "UserPromptSubmit": [
-         { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook working", "timeout": 5 }] }
-       ],
-       "PostToolUse": [
-         { "matcher": "", "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook working", "timeout": 5 }] }
-       ],
-       "Notification": [
-         { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook waiting", "timeout": 5 }] }
-       ],
-       "Stop": [
-         { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook idle", "timeout": 5 }] }
-       ],
-       "SessionEnd": [
-         { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook ended", "timeout": 5 }] }
-       ]
-     }
-   }
-   ```
+| Agent | Config Quay writes | Events → state | Waiting? |
+|---|---|---|---|
+| **Claude Code** | `~/.claude/settings.json` | UserPromptSubmit/PostToolUse → working · Notification → waiting · Stop → idle · SessionEnd → ended | yes |
+| **Codex** | `~/.codex/hooks.json` | UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle | yes |
+| **OpenCode** | `~/.config/opencode/plugin/quay.js` | permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
+| **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_end → idle | no (no permission event) |
 
 `PostToolUse → working` is what clears amber after you approve a permission —
-no `UserPromptSubmit` fires on approval, only the tool runs.
+on approval only the tool runs, no `UserPromptSubmit` fires. The
+OpenCode/Pi files are small plugins that shell out to the same `quay-hook`
+helper, so there is one audited state-writer for every agent.
 
-Without the hooks nothing changes: claude sessions keep the plain
-active/idle heuristic. Codex/OpenCode/Pi always use the heuristic (no
-equivalent hook system is wired).
+How the radar consumes it: `quay-hook` writes one small JSON file per session
+(`{ agent, cwd, state, ts }`) under
+`~/Library/Application Support/am.abhi.quay/agent-state/`, keyed by session and
+tagged with the agent so two agents sharing a folder don't collide. The 5 s
+poll reads them. It trusts **waiting** outright and a **fresh working** (event
+within 5 min); a session-log write newer than a waiting event overrides it (the
+session resumed), a stale working falls back to the heuristic, dead-session
+files are pruned after a 10-minute grace, and corrupt/partial files are dropped
+on read. Writes are atomic (temp + rename), so a mid-write poll never reads
+half a file.
+
+### Manual install (appendix)
+
+The Settings button is the supported path; this is the equivalent by hand, e.g.
+for Claude Code. `quay-hook` takes `<state> [agent]` — the agent defaults to
+`claude` when omitted, so a pre-existing single-arg install keeps working.
+
+```sh
+cargo build --release --manifest-path src-tauri/Cargo.toml --bin quay-hook
+cp src-tauri/target/release/quay-hook ~/.local/bin/quay-hook
+```
+
+```json
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook working claude", "timeout": 5 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "", "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook working claude", "timeout": 5 }] }
+    ],
+    "Notification": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook waiting claude", "timeout": 5 }] }
+    ],
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook idle claude", "timeout": 5 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook ended claude", "timeout": 5 }] }
+    ]
+  }
+}
+```
 
 ## Row actions
 
@@ -164,14 +174,21 @@ equivalent hook system is wired).
   are not summed in.
 - Activity and session names are **cwd-keyed**: two sessions in the same
   folder share the newest session's signal and label.
-- OpenCode activity is CPU-only; Pi and OpenCode have no session names.
+- Without hooks, OpenCode activity is CPU-only; Pi and OpenCode have no
+  session names.
 - Slugs are built from the raw process cwd; symlinked or `/private/var`
   canonicalized paths may miss the session dir — the state then degrades to
   the CPU signal. (Hook-state cwds are canonicalized by `quay-hook`, so the
-  waiting signal is immune to this.)
-- Hook state is cwd-keyed too: two claude sessions in one folder share it,
-  waiting winning over working/idle. Per-session attribution needs a PID in
-  the hook payload, which Claude Code doesn't provide.
+  hook signal is immune to this.)
+- Hook state is keyed by (agent, cwd): different agents in one folder stay
+  distinct, but **two sessions of the same agent in one folder share it**
+  (waiting > working > idle). Per-session attribution needs a PID in the hook
+  payload, which the agents don't provide. Pi reports working/idle only (no
+  permission event); OpenCode "working" leans on the heuristic + its
+  permission-replied event (no clean "turn started" event).
+- The stable helper path (`…/am.abhi.quay/bin/quay-hook`) is written into each
+  agent's config verbatim; if you install with hooks pointing at an old
+  location, reinstall from Settings to re-point them.
 - Jump to session covers Herdr, supacode, Cmux, Kitty, WezTerm, Ghostty,
   Terminal.app, and iTerm2. Bare tmux/screen/zellij are the remaining gap.
   Ghostty 1.3 falls back to cwd matching (ambiguous when two terminals share

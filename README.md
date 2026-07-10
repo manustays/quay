@@ -40,7 +40,7 @@ If you build a lot of local services, you know the dance: remember which folder,
 - **Open a terminal** already `cd`'d into the service's folder, when you actually need to watch logs.
 - **Auto-detect on add** — pick a folder and the app reads `package.json` / `requirements.txt` / `.env` to pre-fill the start command and port.
 - **Port radar** — dev servers you started outside Quay show up in a **Detected** section (project name + framework icon), with one-click **adopt as service**, kill, or ignore. A stopped item whose port is taken by another process gets a ⚠ collision badge.
-- **Agent radar** — terminal AI-agent sessions (Claude Code, Codex CLI, OpenCode, Pi) you started yourself show up in an **Agents** section with project name + stack icon, session name on hover, CPU/memory/uptime, and an active/idle dot; sessions in the same folder club into a project row with stacked agent badges. Reveal-in-Finder, kill, and ignore per session.
+- **Agent radar** — terminal AI-agent sessions (Claude Code, Codex CLI, OpenCode, Pi) you started yourself show up in an **Agents** section with project name + stack icon, session name on hover, CPU/memory/uptime, and a working / idle / waiting-on-you dot; sessions in the same folder club into a project row with stacked agent badges. Install per-agent hooks in one click (Settings) for exact states — including "waiting at a permission prompt". Jump-to-session, reveal-in-Finder, kill, and ignore per session.
 - **Tech-stack icons** — rows show the detected framework/runtime (Vite, Next, Django, Rails, Go, Rust, Docker, …) as a brand-colored icon.
 - **Groups** — label related items (backend + frontend of one app) with a shared group; they cluster together with an aggregate status dot and start-all/stop-all.
 - **Favorites + search** — pin the services you use most; the rest tuck under a collapsible "More".
@@ -107,7 +107,7 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 | [Usage](docs/usage.md) | Adding items, run modes, status, browser/terminal actions, favorites |
 | [Docker services](docs/docker-services.md) | Running and monitoring Docker containers as items |
 | [Port radar](docs/port-radar.md) | How unmanaged listeners are discovered, adopted, killed, ignored |
-| [Agent radar](docs/agent-radar.md) | How terminal AI-agent sessions are detected and what "active" means |
+| [Agent radar](docs/agent-radar.md) | How terminal AI-agent sessions are detected, the working/idle/waiting states, and installing per-agent hooks |
 | [Metrics](docs/metrics.md) | How live CPU/memory sampling works (processes + `docker stats`) |
 | [Configuration](docs/configuration.md) | `config.json` location + full field reference |
 | [Packaging & distribution](docs/packaging.md) | Build a `.dmg`, code-sign, notarize, and the release CI |
