@@ -17,17 +17,15 @@ interface AgentRowProps {
 	onDismiss: (entry: DiscoveredAgent) => void;
 }
 
-/** The waiting/active/idle dot shared by session rows and folder rows. */
+/** The waiting/working/idle dot shared by session rows and folder rows. */
 function StateDot({ state }: { state: DiscoveredAgent['state'] }): React.JSX.Element {
 	return (
 		<span
-			title={
-				state === 'waiting' ? 'waiting on you' : state === 'active' ? 'recent activity' : 'idle'
-			}
+			title={state === 'waiting' ? 'waiting on you' : state === 'working' ? 'working' : 'idle'}
 			className={cn(
 				'size-2 shrink-0 rounded-full',
 				state === 'waiting' && 'animate-pulse bg-amber-500',
-				state === 'active' && 'animate-pulse bg-emerald-500',
+				state === 'working' && 'animate-pulse bg-emerald-500',
 				state === 'idle' && 'border border-muted-foreground/60',
 			)}
 		/>
@@ -37,8 +35,9 @@ function StateDot({ state }: { state: DiscoveredAgent['state'] }): React.JSX.Ele
 /**
  * A read-only row for a terminal agent session found by the agent radar.
  * Leading dot shows the state: pulsing amber = waiting on you (hook-reported),
- * pulsing green = active (recent session-log write or busy CPU), hollow muted
- * = idle. Hovering the name shows the session's best-effort label. Dimmed like
+ * pulsing green = working (hook-reported, or a recent session-log write / busy
+ * CPU), hollow muted = idle. Hovering the name shows the session's best-effort
+ * label. Dimmed like
  * the Detected rows since these sessions are observed, not managed. Hover
  * reveals Jump / Reveal / Kill / Ignore.
  */
@@ -142,7 +141,7 @@ export function AgentFolderRow({
 	const [open, setOpen] = useState(false);
 	// One waiting member makes the whole folder "needs you" — amber beats green.
 	const anyWaiting = folder.agents.some((a) => a.state === 'waiting');
-	const anyActive = folder.agents.some((a) => a.state === 'active');
+	const anyWorking = folder.agents.some((a) => a.state === 'working');
 	const metrics = aggregateGroupMetrics(
 		folder.agents.map((a) => ({
 			id: String(a.pid),
@@ -163,7 +162,7 @@ export function AgentFolderRow({
 								'h-3 w-1.5 rounded-full',
 								anyWaiting
 									? 'animate-pulse bg-amber-500'
-									: anyActive
+									: anyWorking
 										? 'animate-pulse bg-emerald-500'
 										: 'bg-muted-foreground/40',
 							)}

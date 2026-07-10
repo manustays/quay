@@ -95,11 +95,12 @@ export interface DiscoveredAgent {
 	cpuPercent: number;
 	memoryBytes: number;
 	/**
-	 * "waiting" = hook-reported, session blocked on the user (claude only);
-	 * "active" = recent session-log write or busy CPU — a recent-activity
-	 * signal, not proof of work; "idle" otherwise.
+	 * "waiting" = hook-reported, session blocked on the user; "working" =
+	 * hook-reported turn in progress, or (with no hooks installed) a recent
+	 * session-log write / busy CPU — then a recent-activity signal, not proof
+	 * of work; "idle" otherwise.
 	 */
-	state: 'active' | 'idle' | 'waiting';
+	state: 'working' | 'idle' | 'waiting';
 	/** Controlling tty (e.g. "ttys002") — jump-to-session's window lookup key. */
 	tty: string;
 	/** True when the hosting terminal can be focused by tty (Terminal.app / iTerm). */
