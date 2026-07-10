@@ -12,6 +12,9 @@ dist
 dist-ssr
 *.local
 
+# quay-hook helper staged for bundling — rebuilt by `npm run hook:build`
+src-tauri/binaries/
+
 # Updater manifest — generated at release time by scripts/make-latest-json.mjs and
 # published as a GitHub Release asset; never committed.
 latest.json

@@ -4,6 +4,7 @@ pub mod commands;
 pub mod detect;
 pub mod docker;
 pub mod health;
+pub mod hooks_install;
 pub mod metrics;
 pub mod model;
 pub mod scanner;
@@ -332,6 +333,22 @@ pub fn run() {
 
 			let dir = store::config_dir()?;
 			app.manage(commands::init_state(dir));
+
+			// Refresh an already-installed quay-hook helper if the bundled bytes
+			// changed (i.e. the app updated). Never creates it unsolicited —
+			// installing hooks is opt-in from Settings; this only keeps an
+			// existing install current. Off the main thread: pure fs work.
+			{
+				let app_handle = app.handle().clone();
+				std::thread::spawn(move || {
+					let st = app_handle.state::<state::AppState>();
+					if st.dir.join("bin/quay-hook").exists() {
+						if let Some(src) = hooks_install::bundled_hook(&app_handle) {
+							let _ = hooks_install::install_helper(&src, &st.dir);
+						}
+					}
+				});
+			}
 
 			// Reattach to background services that outlived a previous app session
 			// (e.g. a crash, force-quit, or relaunch after sleep). For each persisted

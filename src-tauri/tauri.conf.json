@@ -4,9 +4,9 @@
 	"version": "0.16.0",
 	"identifier": "am.abhi.quay",
 	"build": {
-		"beforeDevCommand": "npm run dev",
+		"beforeDevCommand": "npm run hook:build && npm run dev",
 		"devUrl": "http://localhost:1420",
-		"beforeBuildCommand": "npm run build",
+		"beforeBuildCommand": "npm run hook:build && npm run build",
 		"frontendDist": "../dist"
 	},
 	"app": {
@@ -49,6 +49,9 @@
 		"active": true,
 		"targets": "all",
 		"createUpdaterArtifacts": true,
+		"resources": [
+			"binaries/quay-hook"
+		],
 		"icon": [
 			"icons/32x32.png",
 			"icons/128x128.png",
