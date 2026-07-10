@@ -7,7 +7,50 @@
 //! moving or updating. Every agent's config references that one path.
 
 use crate::model::AppError;
+use serde::Serialize;
+use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
+
+const OPENCODE_JS: &str = include_str!("../assets/opencode-quay.js");
+const PI_TS: &str = include_str!("../assets/pi-quay.ts");
+
+/// One hook we install: the agent event, an optional matcher (present → written
+/// as `"matcher"`), and the quay-hook state arg the event maps to.
+struct HookSpec {
+	event: &'static str,
+	matcher: Option<&'static str>,
+	state: &'static str,
+}
+
+/// Claude Code (`~/.claude/settings.json`). PostToolUse → working is what clears
+/// amber after you approve a permission prompt.
+const CLAUDE_SPECS: &[HookSpec] = &[
+	HookSpec { event: "UserPromptSubmit", matcher: None, state: "working" },
+	HookSpec { event: "PostToolUse", matcher: Some(""), state: "working" },
+	HookSpec { event: "Notification", matcher: None, state: "waiting" },
+	HookSpec { event: "Stop", matcher: None, state: "idle" },
+	HookSpec { event: "SessionEnd", matcher: None, state: "ended" },
+];
+
+/// Codex (`~/.codex/hooks.json`). No SessionEnd event — the radar's dead-cwd
+/// prune reclaims stale files instead.
+// ponytail: Codex PermissionRequest hooks can allow/deny; quay-hook exits 0
+// with no stdout, which must read as "decline to decide" so the normal approval
+// prompt still shows. Verify live; if not, drop this waiting mapping.
+const CODEX_SPECS: &[HookSpec] = &[
+	HookSpec { event: "UserPromptSubmit", matcher: None, state: "working" },
+	HookSpec { event: "PostToolUse", matcher: Some(""), state: "working" },
+	HookSpec { event: "PermissionRequest", matcher: Some(""), state: "waiting" },
+	HookSpec { event: "Stop", matcher: None, state: "idle" },
+];
+
+/// Per-agent install state for the Settings pane. Mirrors the TS `HookStatus`.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HookStatus {
+	pub agent: &'static str,
+	pub installed: bool,
+}
 
 /// Locate the `quay-hook` helper shipped with the app, to copy to the stable
 /// path. In a bundle it is a resource at `<resource_dir>/binaries/quay-hook`;
@@ -45,6 +88,178 @@ pub fn install_helper(src: &Path, data_dir: &Path) -> Result<PathBuf, AppError> 
 	Ok(dst)
 }
 
+/// Write `bytes` to `path` atomically (temp + rename), creating parents.
+fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+	if let Some(p) = path.parent() {
+		std::fs::create_dir_all(p)?;
+	}
+	let tmp = path.with_extension("json.quay-tmp");
+	std::fs::write(&tmp, bytes)?;
+	std::fs::rename(&tmp, path)?;
+	Ok(())
+}
+
+fn to_pretty(v: &Value) -> Result<String, AppError> {
+	serde_json::to_string_pretty(v).map_err(|e| AppError::Message(e.to_string()))
+}
+
+/// Read a JSON config that must be an object; missing or empty → `{}`. A file
+/// that exists but isn't valid JSON, or isn't an object, is an error — we never
+/// silently overwrite a config we can't understand.
+fn read_json_object(path: &Path) -> Result<Value, AppError> {
+	match std::fs::read_to_string(path) {
+		Ok(s) if s.trim().is_empty() => Ok(json!({})),
+		Ok(s) => {
+			let v: Value = serde_json::from_str(&s)
+				.map_err(|e| AppError::Message(format!("{}: invalid JSON ({e})", path.display())))?;
+			if !v.is_object() {
+				return Err(AppError::Message(format!("{}: expected a JSON object", path.display())));
+			}
+			Ok(v)
+		}
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+		Err(e) => Err(e.into()),
+	}
+}
+
+/// True when this hook group contains a command that runs our helper — matched
+/// by the exact stable helper path, so it can't touch an unrelated user hook.
+fn is_managed_group(g: &Value, helper: &str) -> bool {
+	g.get("hooks").and_then(Value::as_array).is_some_and(|hooks| {
+		hooks.iter().any(|h| {
+			h.get("command").and_then(Value::as_str).is_some_and(|c| c.contains(helper))
+		})
+	})
+}
+
+/// A fresh managed hook group for one event.
+fn managed_group(command: &str, matcher: Option<&str>) -> Value {
+	let mut g = json!({ "hooks": [ { "type": "command", "command": command, "timeout": 5 } ] });
+	if let Some(m) = matcher {
+		g["matcher"] = json!(m);
+	}
+	g
+}
+
+/// Merge our hook groups into a Claude/Codex JSON config. Idempotent and
+/// path-updating: each event's managed groups are stripped and re-added, so a
+/// double install is byte-identical and a helper-path change is corrected.
+/// Unknown keys and the user's own hooks are never touched.
+fn install_json_hooks(path: &Path, helper: &Path, agent: &str, specs: &[HookSpec]) -> Result<(), AppError> {
+	let helper_str = helper.display().to_string();
+	let mut root = read_json_object(path)?;
+	let obj = root.as_object_mut().unwrap();
+	let hooks = obj
+		.entry("hooks")
+		.or_insert_with(|| json!({}))
+		.as_object_mut()
+		.ok_or_else(|| AppError::Message(format!("{}: \"hooks\" is not an object", path.display())))?;
+	for spec in specs {
+		// Path may contain spaces ("Application Support") — quote for the shell.
+		let command = format!("\"{}\" {} {}", helper_str, spec.state, agent);
+		let arr = hooks
+			.entry(spec.event)
+			.or_insert_with(|| json!([]))
+			.as_array_mut()
+			.ok_or_else(|| AppError::Message(format!("{}: \"{}\" is not an array", path.display(), spec.event)))?;
+		arr.retain(|g| !is_managed_group(g, &helper_str));
+		arr.push(managed_group(&command, spec.matcher));
+	}
+	write_atomic(path, format!("{}\n", to_pretty(&root)?).as_bytes())
+}
+
+/// Remove our hook groups from a Claude/Codex JSON config. Only strips groups we
+/// manage and only removes an event key / the `hooks` object when *our* removal
+/// emptied it (a user's own empty array is left alone). `delete_if_empty` (codex
+/// hooks.json, which is entirely ours) deletes the file when nothing remains.
+fn uninstall_json_hooks(path: &Path, helper: &Path, delete_if_empty: bool) -> Result<(), AppError> {
+	if !path.exists() {
+		return Ok(());
+	}
+	let helper_str = helper.display().to_string();
+	let mut root = read_json_object(path)?;
+	let obj = root.as_object_mut().unwrap();
+	if let Some(hooks) = obj.get_mut("hooks").and_then(Value::as_object_mut) {
+		let events: Vec<String> = hooks.keys().cloned().collect();
+		for ev in events {
+			if let Some(arr) = hooks.get_mut(&ev).and_then(Value::as_array_mut) {
+				let before = arr.len();
+				arr.retain(|g| !is_managed_group(g, &helper_str));
+				if arr.is_empty() && arr.len() < before {
+					hooks.remove(&ev);
+				}
+			}
+		}
+		if hooks.is_empty() {
+			obj.remove("hooks");
+		}
+	}
+	if delete_if_empty && obj.is_empty() {
+		std::fs::remove_file(path)?;
+		return Ok(());
+	}
+	write_atomic(path, format!("{}\n", to_pretty(&root)?).as_bytes())
+}
+
+fn remove_if_exists(path: &Path) -> Result<(), AppError> {
+	match std::fs::remove_file(path) {
+		Ok(()) => Ok(()),
+		Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+		Err(e) => Err(e.into()),
+	}
+}
+
+fn claude_config(home: &Path) -> PathBuf { home.join(".claude/settings.json") }
+fn codex_config(home: &Path) -> PathBuf { home.join(".codex/hooks.json") }
+fn opencode_plugin(home: &Path) -> PathBuf { home.join(".config/opencode/plugin/quay.js") }
+fn pi_extension(home: &Path) -> PathBuf { home.join(".pi/agent/extensions/quay.ts") }
+
+/// Install the hook config for one agent. The helper binary must already be at
+/// `helper` (installed by `install_helper`) — every agent references it: claude
+/// and codex from their JSON configs, opencode and pi from their plugins.
+pub fn install(agent: &str, home: &Path, helper: &Path) -> Result<(), AppError> {
+	match agent {
+		"claude" => install_json_hooks(&claude_config(home), helper, "claude", CLAUDE_SPECS),
+		"codex" => install_json_hooks(&codex_config(home), helper, "codex", CODEX_SPECS),
+		"opencode" => write_atomic(&opencode_plugin(home), OPENCODE_JS.as_bytes()),
+		"pi" => write_atomic(&pi_extension(home), PI_TS.as_bytes()),
+		_ => Err(AppError::Message(format!("unknown agent: {agent}"))),
+	}
+}
+
+/// Remove one agent's hook config. Leaves the shared helper binary in place —
+/// other agents may still reference it. `helper` is the stable path used to
+/// recognize the commands we manage.
+pub fn uninstall(agent: &str, home: &Path, helper: &Path) -> Result<(), AppError> {
+	match agent {
+		"claude" => uninstall_json_hooks(&claude_config(home), helper, false),
+		"codex" => uninstall_json_hooks(&codex_config(home), helper, true),
+		"opencode" => remove_if_exists(&opencode_plugin(home)),
+		"pi" => remove_if_exists(&pi_extension(home)),
+		_ => Err(AppError::Message(format!("unknown agent: {agent}"))),
+	}
+}
+
+fn file_contains(path: &Path, needle: &str) -> bool {
+	std::fs::read_to_string(path).is_ok_and(|s| s.contains(needle))
+}
+
+/// Install state for all four agents, for the Settings pane. claude/codex need
+/// both the helper binary present and their config referencing it by its exact
+/// stable path; opencode/pi are just the presence of the plugin file (which
+/// references the helper by absolute path).
+pub fn statuses(home: &Path, data_dir: &Path) -> Vec<HookStatus> {
+	let helper = data_dir.join("bin/quay-hook");
+	let helper_str = helper.display().to_string();
+	let json_ok = |p: PathBuf| helper.exists() && file_contains(&p, &helper_str);
+	vec![
+		HookStatus { agent: "claude", installed: json_ok(claude_config(home)) },
+		HookStatus { agent: "codex", installed: json_ok(codex_config(home)) },
+		HookStatus { agent: "opencode", installed: opencode_plugin(home).exists() },
+		HookStatus { agent: "pi", installed: pi_extension(home).exists() },
+	]
+}
+
 #[cfg(test)]
 mod tests {
 	use super::*;
@@ -79,6 +294,104 @@ mod tests {
 		install_helper(&src, &data).unwrap();
 		assert_eq!(std::fs::read(&dst).unwrap(), b"v2-longer");
 
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn claude_install_is_idempotent_and_preserves_user_keys() {
+		let d = tmp();
+		let cfg = d.join(".claude/settings.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		// User config: an unrelated top-level key and their own hook.
+		std::fs::write(
+			&cfg,
+			r#"{"model":"opus","hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-own-thing"}]}]}}"#,
+		)
+		.unwrap();
+		let helper = PathBuf::from("/Users/x/Library/Application Support/am.abhi.quay/bin/quay-hook");
+
+		let helper_str = helper.display().to_string();
+		install_json_hooks(&cfg, &helper, "claude", CLAUDE_SPECS).unwrap();
+		let once = std::fs::read_to_string(&cfg).unwrap();
+		// User's key and their own Stop hook both survive.
+		assert!(once.contains("\"model\": \"opus\""));
+		assert!(once.contains("my-own-thing"));
+		// Our five events are present, commands reference the helper + agent tag.
+		assert!(once.contains("UserPromptSubmit"));
+		assert!(once.contains("SessionEnd"));
+		assert!(once.contains(&helper_str));
+		assert!(once.contains("working claude"));
+
+		// Second install is byte-identical (no duplicate groups).
+		install_json_hooks(&cfg, &helper, "claude", CLAUDE_SPECS).unwrap();
+		assert_eq!(std::fs::read_to_string(&cfg).unwrap(), once);
+		// Exactly one managed Stop group alongside the user's.
+		let v: Value = serde_json::from_str(&once).unwrap();
+		let stop = v["hooks"]["Stop"].as_array().unwrap();
+		assert_eq!(stop.len(), 2);
+		assert_eq!(stop.iter().filter(|g| is_managed_group(g, &helper_str)).count(), 1);
+
+		// Uninstall strips only our groups; user's Stop hook and key remain.
+		// (The stable helper path is fixed in production, so uninstall matches
+		// the same path install wrote.)
+		uninstall_json_hooks(&cfg, &helper, false).unwrap();
+		let after = std::fs::read_to_string(&cfg).unwrap();
+		assert!(!after.contains(&helper_str));
+		assert!(after.contains("my-own-thing"));
+		assert!(after.contains("\"model\": \"opus\""));
+		let va: Value = serde_json::from_str(&after).unwrap();
+		assert_eq!(va["hooks"]["Stop"].as_array().unwrap().len(), 1);
+		// Events that were entirely ours are gone.
+		assert!(va["hooks"].get("UserPromptSubmit").is_none());
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn codex_creates_and_deletes_its_own_file() {
+		let d = tmp();
+		let cfg = codex_config(&d);
+		let helper = PathBuf::from("/x/am.abhi.quay/bin/quay-hook");
+		// Create-if-missing.
+		assert!(!cfg.exists());
+		install_json_hooks(&cfg, &helper, "codex", CODEX_SPECS).unwrap();
+		assert!(cfg.exists());
+		assert!(std::fs::read_to_string(&cfg).unwrap().contains("PermissionRequest"));
+		// Uninstall of an all-ours file removes it entirely.
+		uninstall_json_hooks(&cfg, &helper, true).unwrap();
+		assert!(!cfg.exists());
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn non_object_config_is_rejected() {
+		let d = tmp();
+		let cfg = d.join("settings.json");
+		std::fs::write(&cfg, "[1,2,3]").unwrap();
+		let helper = PathBuf::from("/x/am.abhi.quay/bin/quay-hook");
+		assert!(install_json_hooks(&cfg, &helper, "claude", CLAUDE_SPECS).is_err());
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn statuses_reflect_install_state() {
+		let d = tmp();
+		let home = d.join("home");
+		let data = d.join("data");
+		std::fs::create_dir_all(&home).unwrap();
+		// Nothing installed → all false.
+		assert!(statuses(&home, &data).iter().all(|s| !s.installed));
+
+		// Helper present + claude config referencing it → claude installed.
+		let helper = install_helper(&{ let p = d.join("h"); std::fs::write(&p, b"x").unwrap(); p }, &data).unwrap();
+		install(&"claude".to_string(), &home, &helper).unwrap();
+		install(&"opencode".to_string(), &home, &helper).unwrap();
+		let st = statuses(&home, &data);
+		let get = |a: &str| st.iter().find(|s| s.agent == a).unwrap().installed;
+		assert!(get("claude"));
+		assert!(get("opencode"));
+		assert!(!get("codex"));
+		assert!(!get("pi"));
 		std::fs::remove_dir_all(&d).ok();
 	}
 }

@@ -685,6 +685,33 @@ pub fn ignore_agent(state: State<AppState>, agent: String, cwd: String) -> Resul
 	persist(&state)
 }
 
+/// Per-agent hook-install state for the Settings pane.
+#[tauri::command]
+pub fn get_hook_statuses(state: State<AppState>) -> Result<Vec<crate::hooks_install::HookStatus>, AppError> {
+	let home = dirs::home_dir().ok_or_else(|| AppError::Message("no home directory".into()))?;
+	Ok(crate::hooks_install::statuses(&home, &state.dir))
+}
+
+/// Install the quay-hook helper (if needed) and one agent's hook config so its
+/// sessions report working/waiting/idle to the radar. Acts immediately; every
+/// agent references the same app-managed helper binary.
+#[tauri::command]
+pub fn install_agent_hooks(app: AppHandle, state: State<AppState>, agent: String) -> Result<(), AppError> {
+	let home = dirs::home_dir().ok_or_else(|| AppError::Message("no home directory".into()))?;
+	let src = crate::hooks_install::bundled_hook(&app)
+		.ok_or_else(|| AppError::Message("bundled quay-hook helper not found".into()))?;
+	let helper = crate::hooks_install::install_helper(&src, &state.dir)?;
+	crate::hooks_install::install(&agent, &home, &helper)
+}
+
+/// Remove one agent's hook config. Leaves the shared helper binary in place.
+#[tauri::command]
+pub fn uninstall_agent_hooks(state: State<AppState>, agent: String) -> Result<(), AppError> {
+	let home = dirs::home_dir().ok_or_else(|| AppError::Message("no home directory".into()))?;
+	let helper = state.dir.join("bin/quay-hook");
+	crate::hooks_install::uninstall(&agent, &home, &helper)
+}
+
 /// True if the Docker daemon is currently responding.
 #[tauri::command]
 pub fn docker_daemon_running() -> bool {
