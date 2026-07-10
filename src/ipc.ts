@@ -1,9 +1,11 @@
 import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import type {
+	AgentKind,
 	DetectResult,
 	DiscoveredAgent,
 	DiscoveredPort,
+	HookStatus,
 	ItemMetrics,
 	ItemStatus,
 	ManagedItem,
@@ -33,6 +35,15 @@ export const updateSettings = (settings: Settings) => invoke<void>('update_setti
 
 /** List terminal apps detected as installed, for the settings picker. */
 export const getTerminals = () => invoke<string[]>('get_terminals');
+
+/** Per-agent hook-install state for the Settings pane. */
+export const getHookStatuses = () => invoke<HookStatus[]>('get_hook_statuses');
+/** Install the quay-hook helper + one agent's hook config. */
+export const installAgentHooks = (agent: AgentKind) =>
+	invoke<void>('install_agent_hooks', { agent });
+/** Remove one agent's hook config (leaves the shared helper binary). */
+export const uninstallAgentHooks = (agent: AgentKind) =>
+	invoke<void>('uninstall_agent_hooks', { agent });
 
 /**
  * List formula names known to `brew services`.

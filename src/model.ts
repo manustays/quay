@@ -77,6 +77,12 @@ export interface DiscoveredPort {
  */
 export type AgentKind = 'claude' | 'codex' | 'opencode' | 'pi';
 
+/** Whether an agent's Quay radar hooks are installed — mirrors Rust `HookStatus`. */
+export interface HookStatus {
+	agent: AgentKind;
+	installed: boolean;
+}
+
 /**
  * An interactive terminal AI-agent session found by the backend agent radar —
  * mirrors the Rust `DiscoveredAgent` struct (serde rename_all = "camelCase").

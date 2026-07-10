@@ -18,8 +18,23 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from '@/components/ui/select';
-import type { Settings } from '../model';
-import { getSettings, updateSettings, getTerminals } from '../ipc';
+import { RowIcon } from '@/components/StackIcon';
+import type { AgentKind, HookStatus, Settings } from '../model';
+import {
+	getSettings,
+	updateSettings,
+	getTerminals,
+	getHookStatuses,
+	installAgentHooks,
+	uninstallAgentHooks,
+} from '../ipc';
+
+const AGENT_LABELS: Record<AgentKind, string> = {
+	claude: 'Claude Code',
+	codex: 'Codex',
+	opencode: 'OpenCode',
+	pi: 'Pi',
+};
 
 interface SettingsDialogProps {
 	open: boolean;
@@ -31,13 +46,32 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogProps): React.JSX.Element {
 	const [settings, setSettings] = useState<Settings | null>(null);
 	const [terminals, setTerminals] = useState<string[]>([]);
+	const [hooks, setHooks] = useState<HookStatus[]>([]);
+	// Per-agent hook-install error, shown inline on the row instead of a modal.
+	const [hookErrors, setHookErrors] = useState<Partial<Record<AgentKind, string>>>({});
+	const [hookBusy, setHookBusy] = useState<AgentKind | null>(null);
 
 	useEffect(() => {
 		if (open) {
 			void getSettings().then(setSettings);
 			void getTerminals().then(setTerminals);
+			void getHookStatuses().then(setHooks).catch(() => setHooks([]));
 		}
 	}, [open]);
+
+	/** Install/remove one agent's hooks immediately, then refresh statuses. */
+	const toggleHook = (h: HookStatus) => async () => {
+		setHookBusy(h.agent);
+		setHookErrors((e) => ({ ...e, [h.agent]: undefined }));
+		try {
+			await (h.installed ? uninstallAgentHooks(h.agent) : installAgentHooks(h.agent));
+			setHooks(await getHookStatuses());
+		} catch (err) {
+			setHookErrors((e) => ({ ...e, [h.agent]: String(err) }));
+		} finally {
+			setHookBusy(null);
+		}
+	};
 
 	const set = (patch: Partial<Settings>) =>
 		setSettings((s) => (s ? { ...s, ...patch } : s));
@@ -116,6 +150,40 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 								onCheckedChange={(v) => set({ radarDevOnly: v })}
 							/>
 						</label>
+
+						{hooks.length > 0 && (
+							<div className="grid gap-1.5">
+								<Label className="text-xs text-muted-foreground">
+									Agent radar hooks (working / waiting / idle)
+								</Label>
+								{hooks.map((h) => (
+									<div key={h.agent} className="flex flex-col gap-0.5">
+										<div className="flex items-center justify-between gap-2 text-[13px]">
+											<span className="flex min-w-0 items-center gap-1.5">
+												<RowIcon stack={h.agent} />
+												<span className="truncate">{AGENT_LABELS[h.agent]}</span>
+											</span>
+											<span className="flex shrink-0 items-center gap-1.5">
+												<span className="text-[11px] text-muted-foreground">
+													{h.installed ? 'Installed' : 'Not installed'}
+												</span>
+												<Button
+													variant="ghost"
+													size="sm"
+													disabled={hookBusy === h.agent}
+													onClick={toggleHook(h)}
+												>
+													{h.installed ? 'Remove' : 'Install'}
+												</Button>
+											</span>
+										</div>
+										{hookErrors[h.agent] && (
+											<span className="pl-6 text-[11px] text-destructive">{hookErrors[h.agent]}</span>
+										)}
+									</div>
+								))}
+							</div>
+						)}
 
 						{settings.ignoredPorts.length > 0 && (
 							<div className="grid gap-1.5">
