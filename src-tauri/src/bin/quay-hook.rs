@@ -5,9 +5,12 @@
 //! small file per session under `<data_dir>/am.abhi.quay/agent-state/` that the
 //! radar's 5 s poll reads to distinguish "waiting on you" from plain idle.
 //!
-//! Usage: `quay-hook <working|waiting|idle|ended>` — the state is the argv,
-//! mapped from the hook event in settings.json (UserPromptSubmit/PostToolUse →
-//! working, Notification → waiting, Stop → idle, SessionEnd → ended).
+//! Usage: `quay-hook <working|waiting|idle|ended> [agent]` — the state is the
+//! argv, mapped from the hook event in the agent's config (Claude Code:
+//! UserPromptSubmit/PostToolUse → working, Notification → waiting, Stop → idle,
+//! SessionEnd → ended). `agent` is one of claude|codex|opencode|pi and
+//! defaults to `claude` when absent (back-compat with configs installed before
+//! multi-agent support). It disambiguates two agents sharing a cwd.
 //!
 //! Standalone std + serde_json + dirs on purpose — importing the app lib would
 //! link all of tauri into a helper that runs on every hook event.
@@ -34,6 +37,11 @@ fn run() -> Option<()> {
 	if !matches!(state.as_str(), "working" | "waiting" | "idle" | "ended") {
 		return None;
 	}
+	// Default claude: configs installed before the multi-agent field omit it.
+	let agent = std::env::args().nth(2).unwrap_or_else(|| "claude".to_string());
+	if !matches!(agent.as_str(), "claude" | "codex" | "opencode" | "pi") {
+		return None;
+	}
 	let mut input = String::new();
 	// Hook payloads are small; cap just in case something pipes a transcript.
 	std::io::stdin().take(64 * 1024).read_to_string(&mut input).ok()?;
@@ -57,7 +65,7 @@ fn run() -> Option<()> {
 		.duration_since(std::time::UNIX_EPOCH)
 		.ok()?
 		.as_secs();
-	let body = serde_json::json!({ "cwd": cwd, "state": state, "ts": ts }).to_string();
+	let body = serde_json::json!({ "agent": agent, "cwd": cwd, "state": state, "ts": ts }).to_string();
 	// Temp file is per-session too, so parallel hooks for different sessions
 	// can't clobber each other's rename.
 	let tmp = dir.join(format!("{session_id}.json.tmp"));

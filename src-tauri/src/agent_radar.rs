@@ -45,9 +45,10 @@ pub struct DiscoveredAgent {
 	// the upgrade if the numbers look too small.
 	pub cpu_percent: f32,
 	pub memory_bytes: u64,
-	/// "waiting" (hook-reported: session blocked on the user — claude only),
-	/// "active" (recent session-log write or busy CPU), or "idle". Active/idle
-	/// is a recent-activity signal, not proof of work.
+	/// "waiting" (hook-reported: session blocked on the user), "working"
+	/// (hook-reported turn in progress, or — with no hooks — a recent
+	/// session-log write / busy CPU), or "idle". Without hooks installed,
+	/// working/idle is a recent-activity signal, not proof of work.
 	pub state: &'static str,
 	/// Controlling tty (e.g. "ttys002") — jump-to-session's window lookup key.
 	pub tty: String,
@@ -527,24 +528,39 @@ fn is_active(log_mtime: Option<SystemTime>, cpu_percent: f32, now: SystemTime) -
 }
 
 /// One hook-reported session state, written by `quay-hook` (see
-/// `src/bin/quay-hook.rs`): the event's cwd, the mapped state string, and the
-/// event time as unix seconds.
+/// `src/bin/quay-hook.rs`): the mapped state string and the event time as unix
+/// seconds. Keyed externally by (agent, cwd).
 struct HookState {
 	state: String,
 	ts: SystemTime,
 }
 
-/// Grace before a hook-state file whose cwd has no live session is deleted —
-/// long enough to ride out a transient cwd-resolution miss, short enough that
-/// crashed-while-waiting sessions don't leave junk.
+/// Grace before a hook-state file whose (agent, cwd) has no live session is
+/// deleted — long enough to ride out a transient cwd-resolution miss, short
+/// enough that crashed-while-waiting sessions don't leave junk.
 const HOOK_PRUNE_GRACE_SECS: u64 = 600;
 
-/// Read `agent-state/*.json` into cwd → strongest state. Precedence per cwd:
-/// waiting > working > idle (matches the folder-clubbing UX — one amber member
-/// makes the folder need you). Files whose cwd has no live claude session and
-/// whose event is older than the grace window are pruned in the same walk.
-fn hook_states(dir: &Path, live_cwds: &[&str], now: SystemTime) -> HashMap<String, HookState> {
-	let mut out: HashMap<String, HookState> = HashMap::new();
+/// A hook-reported "working" older than this (with no session-log write since)
+/// is treated as stale and falls back to the mtime/CPU heuristic — guards a
+/// missed Stop/idle hook from pinning a row green forever.
+const WORKING_STALE_SECS: u64 = 300;
+
+/// Read `agent-state/*.json` into (agent, cwd) → strongest state. Keying by
+/// agent as well as cwd keeps a claude and a codex session in the same folder
+/// from clobbering each other. Precedence per key: waiting > working > idle
+/// (matches the folder-clubbing UX — one amber member makes the folder need
+/// you). Files whose (agent, cwd) has no live session and whose event is older
+/// than the grace window are pruned in the same walk. A missing `agent` field
+/// (pre-agent-field state files / older installed helpers) defaults to claude.
+// ponytail: (agent, cwd)-keyed — two sessions of the SAME agent in one folder
+// still share state (waiting wins per precedence); per-session attribution
+// needs a pid in the hook payload, which the agents don't provide.
+fn hook_states(
+	dir: &Path,
+	live: &[(&str, &str)],
+	now: SystemTime,
+) -> HashMap<(String, String), HookState> {
+	let mut out: HashMap<(String, String), HookState> = HashMap::new();
 	let Ok(rd) = std::fs::read_dir(dir) else { return out };
 	let rank = |s: &str| match s {
 		"waiting" => 2,
@@ -558,36 +574,41 @@ fn hook_states(dir: &Path, live_cwds: &[&str], now: SystemTime) -> HashMap<Strin
 		}
 		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
 			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-			Some((v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
+			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
 		});
-		let Some((cwd, state, ts)) = parsed else {
+		let Some((agent, cwd, state, ts)) = parsed else {
 			let _ = std::fs::remove_file(&path); // corrupt/partial: drop it
 			continue;
 		};
 		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
 		let age = now.duration_since(ts).unwrap_or_default().as_secs();
-		if !live_cwds.contains(&cwd.as_str()) {
+		if !live.contains(&(agent.as_str(), cwd.as_str())) {
 			if age > HOOK_PRUNE_GRACE_SECS {
 				let _ = std::fs::remove_file(&path);
 			}
 			continue;
 		}
+		let key = (agent, cwd);
 		let stronger = out
-			.get(&cwd)
+			.get(&key)
 			.is_none_or(|cur| rank(&state) > rank(&cur.state) || (rank(&state) == rank(&cur.state) && ts > cur.ts));
 		if stronger {
-			out.insert(cwd, HookState { state, ts });
+			out.insert(key, HookState { state, ts });
 		}
 	}
 	out
 }
 
-/// Three-way session state. The hook's "waiting" wins — unless the session log
-/// was written *after* the hook event (the session resumed but no clearing
-/// hook has landed yet, e.g. hooks were unregistered mid-session); then the
-/// mtime/CPU heuristic decides active vs idle as before. Pure.
-// ponytail: hook state is cwd-keyed like everything else here; two claude
-// sessions in one folder share it (waiting wins per hook_states precedence).
+/// Three-way session state: "waiting" / "working" / "idle". Pure.
+///
+/// The hook's "waiting" wins — unless the session log was written *after* the
+/// hook event (the session resumed but no clearing hook has landed yet, e.g.
+/// hooks were unregistered mid-session); then the heuristic decides. A fresh
+/// hook "working" (event within `WORKING_STALE_SECS`) shows working directly.
+/// Everything else — no hooks, a stale working, or a hook "idle" — falls to the
+/// mtime/CPU heuristic, whose busy signal now reads as "working" too. So with
+/// hooks uninstalled the behavior is exactly the old active/idle, renamed.
 fn resolve_state(
 	hook: Option<&HookState>,
 	log_mtime: Option<SystemTime>,
@@ -601,9 +622,14 @@ fn resolve_state(
 			if !resumed {
 				return "waiting";
 			}
+		} else if h.state == "working" {
+			let fresh = now.duration_since(h.ts).unwrap_or_default().as_secs() <= WORKING_STALE_SECS;
+			if fresh {
+				return "working";
+			}
 		}
 	}
-	if is_active(log_mtime, cpu_percent, now) { "active" } else { "idle" }
+	if is_active(log_mtime, cpu_percent, now) { "working" } else { "idle" }
 }
 
 /// `pid`'s controlling tty right now (e.g. "ttys002") — jump-to-session's
@@ -698,16 +724,15 @@ pub fn scan(
 	let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
 	let now = SystemTime::now();
 
-	// Hook-reported states (quay-hook, claude only today) — read once per pass;
-	// same walk prunes files for sessions that are gone.
-	let claude_cwds: Vec<&str> = candidates
+	// Hook-reported states (quay-hook, any agent whose hooks are installed) —
+	// read once per pass; same walk prunes files for sessions that are gone.
+	let live: Vec<(&str, &str)> = candidates
 		.iter()
-		.filter(|(_, d, _)| d.kind == "claude")
-		.map(|(_, _, cwd)| cwd.as_str())
+		.map(|(_, d, cwd)| (d.kind, cwd.as_str()))
 		.collect();
 	let hooks = {
 		let dir = app.state::<AppState>().dir.join("agent-state");
-		hook_states(&dir, &claude_cwds, now)
+		hook_states(&dir, &live, now)
 	};
 
 	// Codex rollout inventory + name index, built once per pass and only when
@@ -734,7 +759,7 @@ pub fn scan(
 			let name = detect::name_from_dir(Path::new(&cwd));
 			let stack = detect::stack_from_dir(Path::new(&cwd)).map(str::to_string);
 			let state = resolve_state(
-				(def.kind == "claude").then(|| hooks.get(&cwd)).flatten(),
+				hooks.get(&(def.kind.to_string(), cwd.clone())),
 				session.mtime,
 				cpu_percent,
 				now,
@@ -994,7 +1019,7 @@ mod tests {
 	}
 
 	#[test]
-	fn resolve_state_waiting_wins_unless_log_resumed() {
+	fn resolve_state_waiting_working_and_heuristic() {
 		let now = SystemTime::now();
 		let hook_ts = now - std::time::Duration::from_secs(30);
 		let waiting = HookState { state: "waiting".into(), ts: hook_ts };
@@ -1004,12 +1029,21 @@ mod tests {
 		let before = hook_ts - std::time::Duration::from_secs(10);
 		assert_eq!(resolve_state(Some(&waiting), Some(before), 0.0, now), "waiting");
 		// A log write after the event means the session resumed → heuristic
-		// (5 s old write → active).
+		// (5 s old write → working).
 		let after = hook_ts + std::time::Duration::from_secs(25);
-		assert_eq!(resolve_state(Some(&waiting), Some(after), 0.0, now), "active");
-		// Non-waiting hook states defer to the heuristic entirely.
-		assert_eq!(resolve_state(Some(&working), None, 0.0, now), "idle");
-		assert_eq!(resolve_state(None, None, 50.0, now), "active");
+		assert_eq!(resolve_state(Some(&waiting), Some(after), 0.0, now), "working");
+		// A fresh hook "working" shows working directly, even with cold signals.
+		assert_eq!(resolve_state(Some(&working), None, 0.0, now), "working");
+		// A stale hook "working" defers to the heuristic: cold → idle, busy →
+		// working (via the CPU signal, not the stale hook).
+		let stale = HookState {
+			state: "working".into(),
+			ts: now - std::time::Duration::from_secs(WORKING_STALE_SECS + 1),
+		};
+		assert_eq!(resolve_state(Some(&stale), None, 0.0, now), "idle");
+		assert_eq!(resolve_state(Some(&stale), None, 50.0, now), "working");
+		// No hook → pure heuristic (busy → working, cold → idle).
+		assert_eq!(resolve_state(None, None, 50.0, now), "working");
 		assert_eq!(resolve_state(None, None, 0.0, now), "idle");
 	}
 
@@ -1019,29 +1053,43 @@ mod tests {
 		std::fs::create_dir_all(&d).unwrap();
 		let now = SystemTime::now();
 		let ts = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-		let write = |name: &str, cwd: &str, state: &str, ts: u64| {
+		let write = |name: &str, agent: &str, cwd: &str, state: &str, ts: u64| {
 			std::fs::write(
 				d.join(name),
-				format!("{{\"cwd\":\"{cwd}\",\"state\":\"{state}\",\"ts\":{ts}}}"),
+				format!("{{\"agent\":\"{agent}\",\"cwd\":\"{cwd}\",\"state\":\"{state}\",\"ts\":{ts}}}"),
 			)
 			.unwrap();
 		};
-		// Two sessions in one cwd: waiting must win over a newer idle.
-		write("s1.json", "/x/app", "waiting", ts - 60);
-		write("s2.json", "/x/app", "idle", ts);
+		// Two claude sessions in one cwd: waiting must win over a newer idle.
+		write("s1.json", "claude", "/x/app", "waiting", ts - 60);
+		write("s2.json", "claude", "/x/app", "idle", ts);
+		// Same cwd, different agent → distinct key, not clobbered by claude.
+		write("s2b.json", "codex", "/x/app", "working", ts);
 		// Live cwd → kept even when the dead-cwd grace has passed.
-		write("s3.json", "/y/live", "working", ts - HOOK_PRUNE_GRACE_SECS - 100);
-		// Dead cwd: young file kept on disk (grace), old file pruned.
-		write("s4.json", "/z/dead-young", "idle", ts);
-		write("s5.json", "/z/dead-old", "idle", ts - HOOK_PRUNE_GRACE_SECS - 100);
+		write("s3.json", "claude", "/y/live", "working", ts - HOOK_PRUNE_GRACE_SECS - 100);
+		// Missing agent field → defaults to claude (back-compat).
+		std::fs::write(
+			d.join("s3b.json"),
+			format!("{{\"cwd\":\"/w/old\",\"state\":\"waiting\",\"ts\":{ts}}}"),
+		)
+		.unwrap();
+		// Dead (agent, cwd): young file kept on disk (grace), old file pruned.
+		write("s4.json", "claude", "/z/dead-young", "idle", ts);
+		write("s5.json", "claude", "/z/dead-old", "idle", ts - HOOK_PRUNE_GRACE_SECS - 100);
+		// Live cwd but wrong agent → not live for this pair → grace-pruned.
+		write("s7.json", "codex", "/y/live", "idle", ts - HOOK_PRUNE_GRACE_SECS - 100);
 		std::fs::write(d.join("s6.json"), "{ partial garb").unwrap();
 
-		let map = hook_states(&d, &["/x/app", "/y/live"], now);
-		assert_eq!(map["/x/app"].state, "waiting");
-		assert_eq!(map["/y/live"].state, "working");
-		assert!(!map.contains_key("/z/dead-young")); // not live → not in map
+		let live = [("claude", "/x/app"), ("codex", "/x/app"), ("claude", "/y/live"), ("claude", "/w/old")];
+		let map = hook_states(&d, &live, now);
+		assert_eq!(map[&("claude".into(), "/x/app".into())].state, "waiting");
+		assert_eq!(map[&("codex".into(), "/x/app".into())].state, "working");
+		assert_eq!(map[&("claude".into(), "/y/live".into())].state, "working");
+		assert_eq!(map[&("claude".into(), "/w/old".into())].state, "waiting"); // agent defaulted
+		assert!(!map.contains_key(&("claude".into(), "/z/dead-young".into()))); // not live
 		assert!(d.join("s4.json").exists()); // …but still on disk (grace)
 		assert!(!d.join("s5.json").exists()); // pruned
+		assert!(!d.join("s7.json").exists()); // codex in a claude-only cwd → pruned
 		assert!(!d.join("s6.json").exists()); // corrupt → deleted
 		assert!(hook_states(&d.join("missing"), &[], now).is_empty());
 		std::fs::remove_dir_all(&d).ok();
