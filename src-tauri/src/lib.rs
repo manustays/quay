@@ -354,6 +354,7 @@ pub fn run() {
 			commands::mark_stopped,
 			commands::stop_all,
 			commands::open_browser,
+			commands::open_releases,
 			commands::open_terminal,
 			commands::get_terminals,
 			commands::tail_log,

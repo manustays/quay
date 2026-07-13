@@ -7,7 +7,7 @@ import {
 	CollapsibleTrigger,
 } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-import { installUpdate } from '../ipc';
+import { installUpdate, openReleases } from '../ipc';
 import type { UpdateInfo } from '../model';
 
 interface UpdateBannerProps {
@@ -18,8 +18,9 @@ interface UpdateBannerProps {
 
 /**
  * In-app "update available" banner. Shows the new version, an expandable changelog
- * (only when the release carried notes), an Install button that downloads + restarts
- * via {@link installUpdate}, and a dismiss control. Release notes are rendered as
+ * (only when the release carried notes), a "Changelog" link to the full GitHub
+ * releases page, an Install button that downloads + restarts via
+ * {@link installUpdate}, and a dismiss control. Release notes are rendered as
  * plain text — never markdown/HTML — so a malformed or hostile changelog can't inject
  * markup.
  */
@@ -84,6 +85,14 @@ export function UpdateBanner({ info, onDismiss }: UpdateBannerProps): React.JSX.
 					</CollapsibleContent>
 				</Collapsible>
 			)}
+
+			<button
+				type="button"
+				onClick={() => void openReleases()}
+				className="mt-1 text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+			>
+				Changelog
+			</button>
 
 			{error && (
 				<p className={cn('mt-1 text-[11px] text-destructive')}>{error}</p>

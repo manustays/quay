@@ -485,6 +485,17 @@ pub fn open_browser(app: AppHandle, id: String) -> Result<(), AppError> {
 	Ok(())
 }
 
+/// Open the GitHub releases page (the full changelog) in the system browser.
+/// Hardcoded URL — no arg, no injection surface. macOS-specific (`open`).
+#[tauri::command]
+pub fn open_releases() -> Result<(), AppError> {
+	std::process::Command::new("open")
+		.arg("https://github.com/manustays/quay/releases")
+		.spawn()
+		.map_err(|e| AppError::Message(e.to_string()))?;
+	Ok(())
+}
+
 /// Open a terminal window cd'd into the item's directory.
 #[tauri::command]
 pub fn open_terminal(app: AppHandle, id: String) -> Result<(), AppError> {

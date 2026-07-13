@@ -25,6 +25,8 @@ export const stopItem = (id: string) => invoke<void>('stop_item', { id });
 export const markStopped = (id: string) => invoke<void>('mark_stopped', { id });
 export const stopAll = () => invoke<void>('stop_all');
 export const openBrowser = (id: string) => invoke<void>('open_browser', { id });
+/** Open the GitHub releases page (full changelog) in the system browser. */
+export const openReleases = () => invoke<void>('open_releases');
 export const openTerminal = (id: string) => invoke<void>('open_terminal', { id });
 export const revealInFinder = (id: string) => invoke<void>('reveal_in_finder', { id });
 export const tailLog = (id: string, lines: number) => invoke<string>('tail_log', { id, lines });

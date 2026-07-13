@@ -22,6 +22,48 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
+
+/**
+ * Extract the newest release section from a keep-a-changelog / semantic-release
+ * CHANGELOG. Release headings are level 1-2 followed by a version (`# [0.15.0]…`
+ * or `## [0.13.1]…`); the `### Features` / `### Bug Fixes` subsections stay part
+ * of the body. Returns the body between the first release heading and the next,
+ * trimmed — empty string if no release heading is found.
+ */
+function latestChangelogSection(md) {
+	const lines = md.split("\n");
+	const isRelease = (l) => /^#{1,2} \[?\d+\.\d+\.\d+/.test(l);
+	const start = lines.findIndex(isRelease);
+	if (start === -1) return "";
+	const rest = lines.slice(start + 1);
+	const end = rest.findIndex(isRelease);
+	return (end === -1 ? rest : rest.slice(0, end)).join("\n").trim();
+}
+
+// Self-test runs before any bundle/signature side effects so it works on a
+// machine with no built artifacts: `node scripts/make-latest-json.mjs --selftest`.
+if (process.argv[2] === "--selftest") {
+	const { strict: assert } = await import("node:assert");
+	const fixture = [
+		"# [0.15.0](http://x/compare/v0.14.0...v0.15.0) (2026-07-06)",
+		"",
+		"### Features",
+		"",
+		"* new thing ([abc](http://x))",
+		"",
+		"# [0.14.0](http://x/compare/v0.13.1...v0.14.0) (2026-07-05)",
+		"",
+		"### Bug Fixes",
+		"",
+		"* old thing ([def](http://x))",
+	].join("\n");
+	const got = latestChangelogSection(fixture);
+	assert.equal(got, "### Features\n\n* new thing ([abc](http://x))");
+	assert.equal(latestChangelogSection("no headings here"), "");
+	console.log("make-latest-json: selftest OK");
+	process.exit(0);
+}
+
 const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
 
 const bundleDir = join(
@@ -60,8 +102,19 @@ if (!signature) {
 const url = `https://github.com/manustays/quay/releases/download/v${version}/${encodeURIComponent(tarball)}`;
 const platform = { signature, url };
 
+// Release notes for the in-app "What's new" banner. @semantic-release/changelog
+// writes CHANGELOG.md earlier in the prepare lifecycle, so its top section is the
+// version we're building. Cosmetic — fall back to "" rather than aborting.
+let notes = "";
+try {
+	notes = latestChangelogSection(readFileSync(join(root, "CHANGELOG.md"), "utf8"));
+} catch {
+	console.warn("make-latest-json: CHANGELOG.md unreadable — shipping empty notes.");
+}
+
 const manifest = {
 	version,
+	notes,
 	pub_date: new Date().toISOString(),
 	platforms: {
 		"darwin-aarch64": platform,
