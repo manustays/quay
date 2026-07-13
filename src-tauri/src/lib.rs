@@ -58,8 +58,12 @@ pub fn update_tray_icon(app: &tauri::AppHandle) {
 		};
 		if let Some(tray) = app.tray_by_id("main") {
 			let _ = tray.set_icon_with_as_template(Some(icon), is_template);
-			let title = (title_badge && waiting > 0).then(|| format!("{waiting}"));
-			let _ = tray.set_title(title.as_deref());
+			// macOS workaround: tray-icon 0.24.1's set_title(None) is a no-op — it
+			// never clears the NSStatusItem button title, so a stale count would
+			// linger after the badge is turned off. Pass an empty string to clear.
+			// (Harmless elsewhere: Windows ignores the title, GTK sets it as given.)
+			let title = if title_badge && waiting > 0 { waiting.to_string() } else { String::new() };
+			let _ = tray.set_title(Some(title));
 		}
 	});
 }
