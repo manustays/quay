@@ -83,7 +83,7 @@ pub struct Settings {
 	#[serde(rename = "radarDevOnly", default = "default_radar_dev_only")]
 	pub radar_dev_only: bool,
 	/// When true, the menubar title shows the count of agents waiting on the user
-	/// (e.g. `●2`) beside the tray icon. On by default. The tray *icon* still
+	/// (e.g. `●2`) beside the tray icon. Off by default. The tray *icon* still
 	/// switches to the waiting glyph regardless — this gates only the title text.
 	#[serde(rename = "waitingTitleBadge", default = "default_waiting_title_badge")]
 	pub waiting_title_badge: bool,
@@ -93,9 +93,10 @@ pub struct Settings {
 /// would give `false`, so old configs need this to inherit the new default.
 fn default_radar_dev_only() -> bool { true }
 
-/// Default for [`Settings::waiting_title_badge`] — on. Serde fallback so configs
-/// written before this field existed keep the badge on.
-fn default_waiting_title_badge() -> bool { true }
+/// Default for [`Settings::waiting_title_badge`] — off. Serde fallback so configs
+/// written before this field existed inherit the off default (users opt in via
+/// Settings). Configs that already serialized `true` keep the badge.
+fn default_waiting_title_badge() -> bool { false }
 
 /// Default metrics sampling interval (seconds). Used both by `Settings::default`
 /// and as the serde fallback for configs written before this field existed.
@@ -112,7 +113,7 @@ impl Default for Settings {
 			ignored_ports: Vec::new(),
 			ignored_agents: Vec::new(),
 			radar_dev_only: true,
-			waiting_title_badge: true,
+			waiting_title_badge: false,
 		}
 	}
 }
