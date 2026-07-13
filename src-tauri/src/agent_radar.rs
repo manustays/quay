@@ -499,6 +499,38 @@ fn session_info(
 	}
 }
 
+/// Resolve one candidate's (state, session name), the single gate that decides
+/// whether the agent's own log/session files are read.
+///
+/// When a hook state exists for the `(agent, cwd)` — i.e. the user installed
+/// hooks and the session has emitted at least one event — it is authoritative:
+/// state comes from the hook (CPU still fuels the stale-`working` fallback; no
+/// log mtime, so a hooked `waiting` isn't mtime-downgraded — a resumed session
+/// re-emits `working`, which clears it), the name comes from the hook, and
+/// `session_info` is **never called**, so `~/.claude`/`~/.codex`/`~/.pi` stay
+/// untouched (no macOS "access data from other apps" prompt). Only a candidate
+/// with no hook state falls back to reading its session files.
+// ponytail: dropping the log-mtime resume backstop means a missed clearing hook
+// can pin a row `waiting` until the next event or the prune grace — acceptable
+// since a resumed hooked session emits `working` immediately. Upgrade path is a
+// pid in the hook payload for per-session attribution.
+fn resolve_agent(
+	def: &AgentDef,
+	hook: Option<&HookState>,
+	home: &Path,
+	cwd: &str,
+	cpu_percent: f32,
+	codex: &[(String, String, SystemTime)],
+	codex_index: &str,
+	now: SystemTime,
+) -> (&'static str, Option<String>) {
+	if let Some(h) = hook {
+		return (resolve_state(Some(h), None, cpu_percent, now), h.name.clone());
+	}
+	let session = session_info(def, home, cwd, codex, codex_index);
+	(resolve_state(None, session.mtime, cpu_percent, now), session.name)
+}
+
 /// Read up to `cap` bytes from the start of a file as (lossy) UTF-8.
 fn read_head(path: &Path, cap: usize) -> Option<String> {
 	use std::io::Read;
@@ -533,6 +565,11 @@ fn is_active(log_mtime: Option<SystemTime>, cpu_percent: f32, now: SystemTime) -
 struct HookState {
 	state: String,
 	ts: SystemTime,
+	/// Session name the hook captured (the submitted prompt) — lets a hooked
+	/// session be labelled without reading the agent's own log files. `None`
+	/// for agents whose hook can't supply one (opencode/pi) or before the
+	/// first prompt lands.
+	name: Option<String>,
 }
 
 /// Grace before a hook-state file whose (agent, cwd) has no live session is
@@ -561,6 +598,9 @@ fn hook_states(
 	now: SystemTime,
 ) -> HashMap<(String, String), HookState> {
 	let mut out: HashMap<(String, String), HookState> = HashMap::new();
+	// Name is merged independently of state precedence: the newest-named session
+	// wins, so a nameless `waiting` file can't hide a named sibling's label.
+	let mut names: HashMap<(String, String), (String, SystemTime)> = HashMap::new();
 	let Ok(rd) = std::fs::read_dir(dir) else { return out };
 	let rank = |s: &str| match s {
 		"waiting" => 2,
@@ -575,9 +615,15 @@ fn hook_states(
 		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
 			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
 			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+			Some((
+				agent,
+				v["cwd"].as_str()?.to_string(),
+				v["state"].as_str()?.to_string(),
+				v["ts"].as_u64()?,
+				v["name"].as_str().map(str::to_string),
+			))
 		});
-		let Some((agent, cwd, state, ts)) = parsed else {
+		let Some((agent, cwd, state, ts, name)) = parsed else {
 			let _ = std::fs::remove_file(&path); // corrupt/partial: drop it
 			continue;
 		};
@@ -590,11 +636,21 @@ fn hook_states(
 			continue;
 		}
 		let key = (agent, cwd);
+		if let Some(n) = name {
+			if names.get(&key).is_none_or(|(_, t)| ts >= *t) {
+				names.insert(key.clone(), (n, ts));
+			}
+		}
 		let stronger = out
 			.get(&key)
 			.is_none_or(|cur| rank(&state) > rank(&cur.state) || (rank(&state) == rank(&cur.state) && ts > cur.ts));
 		if stronger {
-			out.insert(key, HookState { state, ts });
+			out.insert(key, HookState { state, ts, name: None });
+		}
+	}
+	for (key, (n, _)) in names {
+		if let Some(hs) = out.get_mut(&key) {
+			hs.name = Some(n);
 		}
 	}
 	out
@@ -643,38 +699,6 @@ fn pid_alive(pid: u32) -> bool {
 	// SAFETY: signal 0 performs only permission/existence checks, no delivery.
 	let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
 	rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
-
-/// Delete a session's stale `waiting` state file(s) for `(agent, cwd)` once the
-/// popover-side [`resolve_state`] has proven the session resumed (its log was
-/// written >2 s after the waiting event) — so the always-on badge stops counting
-/// what the popover already hides. Conservative on purpose: re-parses each file
-/// fresh and removes it only when it is *still* a `waiting` event for this key
-/// whose own `ts` predates the resume evidence (`ts + 2s < log_mtime`). That
-/// leaves untouched (a) a newer `waiting`/`working` hook that landed since the
-/// scan read — closing the read-then-delete race, and (b) a sibling session in
-/// the same folder that is genuinely still waiting with a newer event.
-fn clear_resumed_waiting(dir: &Path, agent: &str, cwd: &str, log_mtime: SystemTime) {
-	let Ok(rd) = std::fs::read_dir(dir) else { return };
-	for entry in rd.flatten() {
-		let path = entry.path();
-		if path.extension().is_none_or(|x| x != "json") {
-			continue;
-		}
-		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
-			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-			let a = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((a, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
-		});
-		let Some((a, c, state, ts)) = parsed else { continue };
-		if a != agent || c != cwd || state != "waiting" {
-			continue;
-		}
-		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
-		if ts + std::time::Duration::from_secs(2) < log_mtime {
-			let _ = std::fs::remove_file(&path);
-		}
-	}
 }
 
 /// Count of distinct waiting agent `(agent, cwd)` pairs from the hook-state files —
@@ -898,10 +922,13 @@ pub fn scan(
 	let state_dir = app.state::<AppState>().dir.join("agent-state");
 	let hooks = hook_states(&state_dir, &live, now);
 
-	// Codex rollout inventory + name index, built once per pass and only when
-	// a codex session is actually on screen. The index is re-read every pass —
-	// thread names get (re)generated over time, so caching it would go stale.
-	let has_codex = candidates.iter().any(|(_, d, _)| matches!(d.activity, Activity::CodexRollout));
+	// Codex rollout inventory + name index, built once per pass and only when a
+	// codex session that is NOT hook-covered is on screen — a hooked codex
+	// session gets its state/name from the hook, so `.codex` is never read.
+	let has_codex = candidates.iter().any(|(_, d, cwd)| {
+		matches!(d.activity, Activity::CodexRollout)
+			&& !hooks.contains_key(&(d.kind.to_string(), cwd.clone()))
+	});
 	let (codex, codex_index) = if has_codex {
 		(
 			codex_rollouts(&home, codex_meta),
@@ -911,41 +938,28 @@ pub fn scan(
 		(Vec::new(), String::new())
 	};
 
-	// (agent, cwd, log_mtime) of live sessions the popover downgraded off "waiting"
-	// via the resume backstop — their stale waiting files are cleared after the loop
-	// so the always-on badge agrees with the rows.
-	let mut resumed_waiting: Vec<(&'static str, String, SystemTime)> = Vec::new();
 	let mut out: Vec<DiscoveredAgent> = candidates
 		.into_iter()
 		.filter_map(|(pid, def, cwd)| {
 			let proc_ = sys.process(Pid::from_u32(pid))?;
 			let cpu_percent = proc_.cpu_usage();
-			let session = session_info(def, &home, &cwd, &codex, &codex_index);
+			// resolve_agent reads the agent's session files only when this
+			// (agent, cwd) has no hook state — so a hooked session never trips
+			// the macOS "access data from other apps" prompt.
+			let hook = hooks.get(&(def.kind.to_string(), cwd.clone()));
+			let (state, session_name) =
+				resolve_agent(def, hook, &home, &cwd, cpu_percent, &codex, &codex_index, now);
 			// Manifest name + stack, like the port radar. Re-read per pass —
 			// a handful of agents × a few small manifest reads every 5 s.
 			let name = detect::name_from_dir(Path::new(&cwd));
 			let stack = detect::stack_from_dir(Path::new(&cwd)).map(str::to_string);
-			let state = resolve_state(
-				hooks.get(&(def.kind.to_string(), cwd.clone())),
-				session.mtime,
-				cpu_percent,
-				now,
-			);
-			// Hook said waiting but we resolved otherwise → resume backstop fired.
-			if state != "waiting"
-				&& hooks.get(&(def.kind.to_string(), cwd.clone())).is_some_and(|h| h.state == "waiting")
-			{
-				if let Some(m) = session.mtime {
-					resumed_waiting.push((def.kind, cwd.clone(), m));
-				}
-			}
 			Some(DiscoveredAgent {
 				pid,
 				agent: def.kind,
 				name,
 				cwd,
 				stack,
-				session_name: session.name,
+				session_name,
 				uptime_sec: proc_.run_time(),
 				cpu_percent,
 				memory_bytes: proc_.memory(),
@@ -959,11 +973,6 @@ pub fn scan(
 		})
 		.collect();
 	out.sort_by_key(|a| a.pid);
-
-	// Persist the popover's resume correction so the always-on badge stops counting it.
-	for (agent, cwd, mtime) in &resumed_waiting {
-		clear_resumed_waiting(&state_dir, agent, cwd, *mtime);
-	}
 
 	// Stamp the live PIDs seen this pass per (agent, cwd) for the badge's liveness
 	// check. Replaces each on-screen key with its current live set; keys whose
@@ -1172,27 +1181,57 @@ mod tests {
 	}
 
 	#[test]
-	fn clear_resumed_waiting_removes_only_stale_matching_files() {
-		let d = std::env::temp_dir().join(format!("msm-crw-{}", uuid::Uuid::new_v4()));
+	fn resolve_agent_reads_only_when_no_hook_state() {
+		// A poisoned HOME: a claude session log on disk with a distinctive name.
+		// When a hook state is present, resolve_agent must NOT read it (privacy);
+		// with no hook state, it falls back to reading it.
+		let d = std::env::temp_dir().join(format!("msm-ra-{}", uuid::Uuid::new_v4()));
+		let cwd = "/x/proj";
+		let proj = d.join(".claude/projects").join(claude_slug(cwd));
+		std::fs::create_dir_all(&proj).unwrap();
+		std::fs::write(
+			proj.join("s.jsonl"),
+			"{\"type\":\"user\",\"message\":{\"content\":\"FILE PROMPT\"}}\n",
+		)
+		.unwrap();
+		let now = SystemTime::now();
+		let claude = &AGENTS[0];
+		assert_eq!(claude.kind, "claude");
+
+		// Hook present → hook name, file untouched (still "working" from the fresh hook).
+		let hook = HookState { state: "working".into(), ts: now, name: Some("HOOK NAME".into()) };
+		let (state, name) = resolve_agent(claude, Some(&hook), &d, cwd, 0.0, &[], "", now);
+		assert_eq!(state, "working");
+		assert_eq!(name.as_deref(), Some("HOOK NAME"));
+
+		// No hook → falls back to reading the session log.
+		let (_, name2) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now);
+		assert_eq!(name2.as_deref(), Some("FILE PROMPT"));
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn hook_states_merges_latest_name_independent_of_state() {
+		let d = std::env::temp_dir().join(format!("msm-hn-{}", uuid::Uuid::new_v4()));
 		std::fs::create_dir_all(&d).unwrap();
-		let w = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
-		// Stale waiting event (ts=100) for (claude,/a) — predates the resume evidence.
-		w("stale.json", r#"{"agent":"claude","cwd":"/a","state":"waiting","ts":100}"#);
-		// A newer waiting event (ts=1000) for the same key — a sibling still waiting.
-		w("fresh.json", r#"{"agent":"claude","cwd":"/a","state":"waiting","ts":1000}"#);
-		// A working file for the key — must be left alone (not waiting).
-		w("work.json", r#"{"agent":"claude","cwd":"/a","state":"working","ts":50}"#);
-		// A waiting file for a different agent — untouched.
-		w("other.json", r#"{"agent":"codex","cwd":"/a","state":"waiting","ts":100}"#);
-
-		// Resume proven by a log write at ts≈200 → only events with ts+2 < 200 go.
-		let mtime = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(200);
-		clear_resumed_waiting(&d, "claude", "/a", mtime);
-
-		assert!(!d.join("stale.json").exists()); // removed (100+2 < 200)
-		assert!(d.join("fresh.json").exists()); // kept (1000+2 !< 200) — sibling wait
-		assert!(d.join("work.json").exists()); // kept (not waiting)
-		assert!(d.join("other.json").exists()); // kept (different agent)
+		let now = SystemTime::now();
+		let ts = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+		// State-winner (waiting) carries no name; an older sibling has one → name survives.
+		std::fs::write(
+			d.join("wait.json"),
+			format!("{{\"agent\":\"claude\",\"cwd\":\"/a\",\"state\":\"waiting\",\"ts\":{ts}}}"),
+		)
+		.unwrap();
+		std::fs::write(
+			d.join("named.json"),
+			format!("{{\"agent\":\"claude\",\"cwd\":\"/a\",\"state\":\"working\",\"ts\":{},\"name\":\"the task\"}}", ts - 30),
+		)
+		.unwrap();
+		let live = [("claude", "/a")];
+		let map = hook_states(&d, &live, now);
+		let hs = &map[&("claude".into(), "/a".into())];
+		assert_eq!(hs.state, "waiting"); // precedence unchanged
+		assert_eq!(hs.name.as_deref(), Some("the task")); // name merged in
 		std::fs::remove_dir_all(&d).ok();
 	}
 
@@ -1325,8 +1364,8 @@ mod tests {
 	fn resolve_state_waiting_working_and_heuristic() {
 		let now = SystemTime::now();
 		let hook_ts = now - std::time::Duration::from_secs(30);
-		let waiting = HookState { state: "waiting".into(), ts: hook_ts };
-		let working = HookState { state: "working".into(), ts: hook_ts };
+		let waiting = HookState { state: "waiting".into(), ts: hook_ts, name: None };
+		let working = HookState { state: "working".into(), ts: hook_ts, name: None };
 		// Waiting holds with no log write, or a write from before the event.
 		assert_eq!(resolve_state(Some(&waiting), None, 0.0, now), "waiting");
 		let before = hook_ts - std::time::Duration::from_secs(10);
@@ -1342,6 +1381,7 @@ mod tests {
 		let stale = HookState {
 			state: "working".into(),
 			ts: now - std::time::Duration::from_secs(WORKING_STALE_SECS + 1),
+			name: None,
 		};
 		assert_eq!(resolve_state(Some(&stale), None, 0.0, now), "idle");
 		assert_eq!(resolve_state(Some(&stale), None, 50.0, now), "working");

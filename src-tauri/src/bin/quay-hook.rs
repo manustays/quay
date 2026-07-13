@@ -32,6 +32,32 @@ fn safe_id(id: &str) -> bool {
 	!id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
+/// Cap a session label at 80 chars (char-boundary safe) with an ellipsis —
+/// mirrors `agent_radar::truncate_label` (can't import the lib, see module doc).
+fn truncate_label(text: &str) -> String {
+	let mut label: String = text.chars().take(80).collect();
+	if label.len() < text.len() {
+		label.push('…');
+	}
+	label
+}
+
+/// The session's display name from a hook payload: the submitted prompt, so a
+/// hooked session needs no read of the agent's own log files (privacy). Claude
+/// Code's `UserPromptSubmit` carries `prompt`; a couple of fallbacks cover other
+/// agents' field names. Skips slash-command envelopes (`<command-name>…`) the
+/// same way `first_user_prompt` does. Only events that actually carry a prompt
+/// (UserPromptSubmit) yield a name; PostToolUse/idle/waiting return None so the
+/// first prompt is preserved by the caller.
+fn prompt_name(v: &serde_json::Value) -> Option<String> {
+	let raw = v["prompt"].as_str().or_else(|| v["user_prompt"].as_str()).or_else(|| v["message"].as_str())?;
+	let text = raw.trim();
+	if text.is_empty() || text.starts_with('<') {
+		return None;
+	}
+	Some(truncate_label(text))
+}
+
 fn run() -> Option<()> {
 	let state = std::env::args().nth(1)?;
 	if !matches!(state.as_str(), "working" | "waiting" | "idle" | "ended") {
@@ -65,7 +91,20 @@ fn run() -> Option<()> {
 		.duration_since(std::time::UNIX_EPOCH)
 		.ok()?
 		.as_secs();
-	let body = serde_json::json!({ "agent": agent, "cwd": cwd, "state": state, "ts": ts }).to_string();
+	// Session name: keep the first prompt seen for this session (matches the
+	// radar's "first user prompt" label). Reuse the existing file's name when
+	// this event carries none (PostToolUse/idle/waiting) or when one is already
+	// set, so a later prompt can't overwrite the first.
+	let existing_name = std::fs::read_to_string(&path)
+		.ok()
+		.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+		.and_then(|old| old["name"].as_str().map(str::to_string));
+	let name = existing_name.or_else(|| prompt_name(&v));
+	let mut obj = serde_json::json!({ "agent": agent, "cwd": cwd, "state": state, "ts": ts });
+	if let Some(n) = &name {
+		obj["name"] = serde_json::Value::String(n.clone());
+	}
+	let body = obj.to_string();
 	// Temp file is per-session too, so parallel hooks for different sessions
 	// can't clobber each other's rename.
 	let tmp = dir.join(format!("{session_id}.json.tmp"));
