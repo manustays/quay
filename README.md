@@ -65,6 +65,38 @@ If you build a lot of local services, you know the dance: remember which folder,
 - For Docker items: [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed (Quay can start the daemon for you, but it must be installed).
 - To build from source: see [Development](docs/development.md).
 
+## Permissions & Privacy
+
+**Why macOS asks "Quay wants to access data from other apps."**
+The **Agent radar** shows the state and name of coding-agent sessions you started
+yourself (Claude Code, Codex CLI, OpenCode, Pi). With no deeper integration, Quay
+learns this the only way it can: by **reading** the session/log files those tools
+write under `~/.claude`, `~/.codex`, and `~/.pi`. macOS Sequoia classifies those as
+another app's data, so it shows that prompt the first time a session is detected.
+
+**It's opt-in and lazy.** Quay never reads those files at launch or in the
+background — the read happens **only when an agent session is actually running and
+you open the popover**. No agents running, no read, no prompt.
+
+**Installing hooks removes the reads entirely.** Turn on per-agent hooks in
+**Settings** (one click) and each agent reports its own state to Quay through a
+tiny helper. Once hooks are active for a session, Quay **stops reading that agent's
+files** and relies on the hook events instead — so the "access data from other
+apps" prompt won't recur for hooked agents. (Session names still come through for
+Claude Code and Codex; OpenCode and Pi hooks don't carry a prompt, so those rows
+may show the project without a session name.)
+
+**Why it's safe:**
+
+- **Read-only.** Quay never writes to your agents' directories. The one exception
+  is the hook config you explicitly install from Settings (and can uninstall).
+- **Stays on your machine.** No telemetry, no analytics — nothing about your
+  sessions, projects, or prompts ever leaves the device.
+- **Nearly zero network.** The only network access is an **optional check for app
+  updates** against GitHub Releases. There is no other outbound traffic.
+- **Fully open source.** Every read described here is in
+  [`src-tauri/src/agent_radar.rs`](src-tauri/src/agent_radar.rs) — audit it yourself.
+
 ## Download
 
 **[⬇ Download for macOS — latest release](https://github.com/manustays/quay/releases/latest)**
