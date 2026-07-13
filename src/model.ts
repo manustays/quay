@@ -52,6 +52,8 @@ export interface Settings {
 	ignoredAgents: { agent: string; cwd: string }[];
 	/** When true, the Detected section hides listeners with no recognized dev stack. */
 	radarDevOnly: boolean;
+	/** When true, the menubar title shows the count of waiting agents (e.g. `●2`). */
+	waitingTitleBadge: boolean;
 }
 
 /**

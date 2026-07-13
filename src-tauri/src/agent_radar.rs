@@ -12,7 +12,7 @@
 use crate::detect;
 use crate::state::AppState;
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use sysinfo::{
@@ -632,6 +632,171 @@ fn resolve_state(
 	if is_active(log_mtime, cpu_percent, now) { "working" } else { "idle" }
 }
 
+/// True if `pid` names a live process right now. `kill(pid, 0)` sends no signal —
+/// it only runs the existence/permission check: `0` = alive and ours, `EPERM` =
+/// alive but another user's, `ESRCH` = no such process. Cheap (no `ps`).
+// ponytail: can't tell a recycled pid from the original, so a crashed waiting
+// session whose pid got reused reads as alive until the popover-open scan
+// reconciles its file — same class of ceiling as the cwd-keyed collapse. Upgrade
+// path is `matches_identity`, but that needs a sysinfo pass this path avoids.
+fn pid_alive(pid: u32) -> bool {
+	// SAFETY: signal 0 performs only permission/existence checks, no delivery.
+	let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
+	rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Delete a session's stale `waiting` state file(s) for `(agent, cwd)` once the
+/// popover-side [`resolve_state`] has proven the session resumed (its log was
+/// written >2 s after the waiting event) — so the always-on badge stops counting
+/// what the popover already hides. Conservative on purpose: re-parses each file
+/// fresh and removes it only when it is *still* a `waiting` event for this key
+/// whose own `ts` predates the resume evidence (`ts + 2s < log_mtime`). That
+/// leaves untouched (a) a newer `waiting`/`working` hook that landed since the
+/// scan read — closing the read-then-delete race, and (b) a sibling session in
+/// the same folder that is genuinely still waiting with a newer event.
+fn clear_resumed_waiting(dir: &Path, agent: &str, cwd: &str, log_mtime: SystemTime) {
+	let Ok(rd) = std::fs::read_dir(dir) else { return };
+	for entry in rd.flatten() {
+		let path = entry.path();
+		if path.extension().is_none_or(|x| x != "json") {
+			continue;
+		}
+		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
+			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+			let a = v["agent"].as_str().unwrap_or("claude").to_string();
+			Some((a, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+		});
+		let Some((a, c, state, ts)) = parsed else { continue };
+		if a != agent || c != cwd || state != "waiting" {
+			continue;
+		}
+		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
+		if ts + std::time::Duration::from_secs(2) < log_mtime {
+			let _ = std::fs::remove_file(&path);
+		}
+	}
+}
+
+/// Count of distinct waiting agent `(agent, cwd)` pairs from the hook-state files —
+/// the always-on menubar signal. Unlike [`hook_states`] this does **no** `ps` scan;
+/// instead it consults `pids` (the live PIDs `scan` last stamped per key) to drop a
+/// crashed-while-waiting session. Runs from the always-on poll loop so the menubar
+/// reflects waiting agents while the popover is closed.
+///
+/// - Dedups by `(agent, cwd)`: two waiting sessions in one folder count once, matching
+///   the folder-rollup UX (one amber member makes the folder need you).
+/// - Honors `ignored`: a hidden agent+cwd pair never badges the menubar (same match as
+///   [`scan`]).
+/// - Liveness: a waiting key present in `pids` whose every seen PID is dead is skipped
+///   (the session exited without a clearing hook). A key **absent** from `pids` was
+///   never scanned, so it still counts — the popover-open scan will reconcile it.
+/// - Skips corrupt JSON and files missing `cwd`/`state`; a missing `agent` defaults to
+///   claude (older helpers wrote no agent field), mirroring [`hook_states`].
+///
+// ponytail: liveness is coarse — pids are keyed by (agent, cwd), so a dead waiting
+// session sharing a folder with a live sibling still badges (can't attribute the
+// waiting file to a pid without the lsof/identity work this cheap path skips). It
+// self-heals on the next popover-open scan; upgrade path is a pid in the hook payload.
+pub fn waiting_count(
+	dir: &Path,
+	ignored: &[crate::model::IgnoredAgent],
+	pids: &HashMap<(String, String), HashSet<u32>>,
+) -> usize {
+	let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
+	let mut keys: HashSet<(String, String)> = HashSet::new();
+	for entry in rd.flatten() {
+		let path = entry.path();
+		if path.extension().is_none_or(|x| x != "json") {
+			continue;
+		}
+		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
+			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
+			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string()))
+		});
+		let Some((agent, cwd, state)) = parsed else { continue };
+		if state != "waiting" {
+			continue;
+		}
+		if ignored.iter().any(|i| i.agent == agent && i.cwd == cwd) {
+			continue;
+		}
+		// Scanned and every PID for the key is dead → crashed/exited session, skip.
+		if let Some(seen) = pids.get(&(agent.clone(), cwd.clone())) {
+			if !seen.is_empty() && !seen.iter().any(|&p| pid_alive(p)) {
+				continue;
+			}
+		}
+		keys.insert((agent, cwd));
+	}
+	keys.len()
+}
+
+/// Live `(agent, cwd)` keys right now — tty-attached agent processes with a
+/// resolvable cwd, minus ignored pairs. A lean cousin of [`scan`]'s candidate
+/// pass for the always-on badge: refreshes only cwd+cmd (no cpu delta, no second
+/// pass, no sleep) because the sweep needs identity, not metrics. Kept separate
+/// from `scan` so the popover's hot path is untouched.
+pub fn live_agent_keys(ignored: &[crate::model::IgnoredAgent]) -> HashSet<(String, String)> {
+	let ps = ps_snapshot();
+	let tty_pids: Vec<Pid> = ps
+		.iter()
+		.filter_map(|(&pid, p)| p.tty.as_deref().map(|_| Pid::from_u32(pid)))
+		.collect();
+	if tty_pids.is_empty() {
+		return HashSet::new();
+	}
+	let mut sys = System::new();
+	let refresh = ProcessRefreshKind::nothing()
+		.with_cmd(UpdateKind::Always)
+		.with_cwd(UpdateKind::Always);
+	sys.refresh_processes_specifics(ProcessesToUpdate::Some(&tty_pids), true, refresh);
+	tty_pids
+		.iter()
+		.filter_map(|&pid| {
+			let proc_ = sys.process(pid)?;
+			let argv: Vec<String> = proc_.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
+			let def = agent_from_argv(&argv)?;
+			let cwd = proc_.cwd()?.to_string_lossy().into_owned();
+			if ignored.iter().any(|i| i.agent == def.kind && i.cwd == cwd) {
+				return None;
+			}
+			Some((def.kind.to_string(), cwd))
+		})
+		.collect()
+}
+
+/// Delete `waiting` hook-state files whose `(agent, cwd)` has no live session and
+/// whose event predates the grace window — the always-on cousin of the prune
+/// baked into [`hook_states`], so the menubar badge stops counting a crashed or
+/// exited waiting session without waiting for a popover scan. Scoped on purpose:
+/// only `waiting` files are touched (`working`/`idle`/corrupt are left to
+/// [`hook_states`] / [`waiting_count`], so the always-on path doesn't change their
+/// handling), and the grace rides out a transient cwd-resolution miss the same way
+/// `hook_states` does. Pure — no process enumeration — so it unit-tests headlessly.
+pub fn prune_orphan_hook_states(dir: &Path, live: &HashSet<(String, String)>, now: SystemTime) {
+	let Ok(rd) = std::fs::read_dir(dir) else { return };
+	for entry in rd.flatten() {
+		let path = entry.path();
+		if path.extension().is_none_or(|x| x != "json") {
+			continue;
+		}
+		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
+			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
+			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+		});
+		let Some((agent, cwd, state, ts)) = parsed else { continue };
+		if state != "waiting" || live.contains(&(agent.clone(), cwd.clone())) {
+			continue;
+		}
+		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
+		if now.duration_since(ts).unwrap_or_default().as_secs() > HOOK_PRUNE_GRACE_SECS {
+			let _ = std::fs::remove_file(&path);
+		}
+	}
+}
+
 /// `pid`'s controlling tty right now (e.g. "ttys002") — jump-to-session's
 /// click-time revalidation, so a recycled PID can't focus someone else's window.
 pub fn current_tty(pid: u32) -> Option<String> {
@@ -730,10 +895,8 @@ pub fn scan(
 		.iter()
 		.map(|(_, d, cwd)| (d.kind, cwd.as_str()))
 		.collect();
-	let hooks = {
-		let dir = app.state::<AppState>().dir.join("agent-state");
-		hook_states(&dir, &live, now)
-	};
+	let state_dir = app.state::<AppState>().dir.join("agent-state");
+	let hooks = hook_states(&state_dir, &live, now);
 
 	// Codex rollout inventory + name index, built once per pass and only when
 	// a codex session is actually on screen. The index is re-read every pass —
@@ -748,6 +911,10 @@ pub fn scan(
 		(Vec::new(), String::new())
 	};
 
+	// (agent, cwd, log_mtime) of live sessions the popover downgraded off "waiting"
+	// via the resume backstop — their stale waiting files are cleared after the loop
+	// so the always-on badge agrees with the rows.
+	let mut resumed_waiting: Vec<(&'static str, String, SystemTime)> = Vec::new();
 	let mut out: Vec<DiscoveredAgent> = candidates
 		.into_iter()
 		.filter_map(|(pid, def, cwd)| {
@@ -764,6 +931,14 @@ pub fn scan(
 				cpu_percent,
 				now,
 			);
+			// Hook said waiting but we resolved otherwise → resume backstop fired.
+			if state != "waiting"
+				&& hooks.get(&(def.kind.to_string(), cwd.clone())).is_some_and(|h| h.state == "waiting")
+			{
+				if let Some(m) = session.mtime {
+					resumed_waiting.push((def.kind, cwd.clone(), m));
+				}
+			}
 			Some(DiscoveredAgent {
 				pid,
 				agent: def.kind,
@@ -784,6 +959,26 @@ pub fn scan(
 		})
 		.collect();
 	out.sort_by_key(|a| a.pid);
+
+	// Persist the popover's resume correction so the always-on badge stops counting it.
+	for (agent, cwd, mtime) in &resumed_waiting {
+		clear_resumed_waiting(&state_dir, agent, cwd, *mtime);
+	}
+
+	// Stamp the live PIDs seen this pass per (agent, cwd) for the badge's liveness
+	// check. Replaces each on-screen key with its current live set; keys whose
+	// sessions are all gone keep their now-dead set (so the badge prunes them).
+	{
+		let mut seen: HashMap<(String, String), HashSet<u32>> = HashMap::new();
+		for a in &out {
+			seen.entry((a.agent.to_string(), a.cwd.clone())).or_default().insert(a.pid);
+		}
+		let st = app.state::<AppState>();
+		let mut pids = st.last_agent_pids.lock().unwrap();
+		for (key, live_pids) in seen {
+			pids.insert(key, live_pids);
+		}
+	}
 	out
 }
 
@@ -862,6 +1057,33 @@ mod tests {
 	}
 
 	#[test]
+	fn prune_orphan_hook_states_only_drops_dead_stale_waiting() {
+		let dir = std::env::temp_dir().join(format!("quay-prune-{}", std::process::id()));
+		let _ = std::fs::remove_dir_all(&dir);
+		std::fs::create_dir_all(&dir).unwrap();
+		let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+		let stale = 1_000_000 - (HOOK_PRUNE_GRACE_SECS + 60);
+		let fresh = 1_000_000 - 10;
+		let write = |name: &str, cwd: &str, state: &str, ts: u64| {
+			let body = serde_json::json!({ "agent": "claude", "cwd": cwd, "state": state, "ts": ts });
+			std::fs::write(dir.join(name), body.to_string()).unwrap();
+		};
+		write("dead_stale.json", "/gone", "waiting", stale); // dead + old  → dropped
+		write("dead_fresh.json", "/gone2", "waiting", fresh); // dead but within grace → kept
+		write("live.json", "/live", "waiting", stale); // key is live → kept
+		write("working.json", "/gone3", "working", stale); // not waiting → untouched
+
+		let live: HashSet<(String, String)> = [("claude".to_string(), "/live".to_string())].into();
+		prune_orphan_hook_states(&dir, &live, now);
+
+		assert!(!dir.join("dead_stale.json").exists(), "dead+stale waiting must be pruned");
+		assert!(dir.join("dead_fresh.json").exists(), "within-grace waiting must survive");
+		assert!(dir.join("live.json").exists(), "live-keyed waiting must survive");
+		assert!(dir.join("working.json").exists(), "non-waiting files are out of scope");
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
 	fn ancestry_target_walks_parent_chain() {
 		let out = concat!(
 			"123 90 ttys002 claude\n",
@@ -890,6 +1112,87 @@ mod tests {
 		assert_eq!(path, d.join("a.jsonl"));
 		assert_eq!(mtime, std::fs::metadata(d.join("a.jsonl")).unwrap().modified().unwrap());
 		assert!(newest_jsonl(&d.join("missing")).is_none());
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn waiting_count_dedups_filters_and_skips_junk() {
+		use crate::model::IgnoredAgent;
+		let d = std::env::temp_dir().join(format!("msm-wc-{}", uuid::Uuid::new_v4()));
+		let no_pids = HashMap::new();
+		// Missing dir → 0.
+		assert_eq!(waiting_count(&d, &[], &no_pids), 0);
+		std::fs::create_dir_all(&d).unwrap();
+		let write = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
+		// Two waiting sessions in the SAME (agent, cwd) → dedup to one.
+		write("s1.json", r#"{"agent":"claude","cwd":"/a","state":"waiting","ts":1}"#);
+		write("s2.json", r#"{"agent":"claude","cwd":"/a","state":"waiting","ts":2}"#);
+		// A distinct waiting pair → +1.
+		write("s3.json", r#"{"agent":"codex","cwd":"/b","state":"waiting","ts":3}"#);
+		// Non-waiting states don't count.
+		write("s4.json", r#"{"agent":"claude","cwd":"/c","state":"working","ts":4}"#);
+		write("s5.json", r#"{"agent":"claude","cwd":"/d","state":"idle","ts":5}"#);
+		// Corrupt / missing-field / non-json files are skipped.
+		write("bad.json", "not json");
+		write("nofield.json", r#"{"agent":"claude","ts":6}"#);
+		write("note.txt", r#"{"agent":"claude","cwd":"/e","state":"waiting","ts":7}"#);
+		assert_eq!(waiting_count(&d, &[], &no_pids), 2); // (claude,/a) + (codex,/b)
+		// Ignoring (codex,/b) drops it.
+		let ignored = vec![IgnoredAgent { agent: "codex".into(), cwd: "/b".into() }];
+		assert_eq!(waiting_count(&d, &ignored, &no_pids), 1);
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn waiting_count_skips_keys_whose_pids_are_all_dead() {
+		let d = std::env::temp_dir().join(format!("msm-wcl-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&d).unwrap();
+		let w = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
+		w("live.json", r#"{"agent":"claude","cwd":"/live","state":"waiting","ts":1}"#);
+		w("dead.json", r#"{"agent":"claude","cwd":"/dead","state":"waiting","ts":1}"#);
+		w("unseen.json", r#"{"agent":"claude","cwd":"/unseen","state":"waiting","ts":1}"#);
+
+		// A definitely-dead pid: spawn a child and reap it.
+		let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
+		child.wait().unwrap();
+		let dead = child.id();
+		let live = std::process::id();
+
+		let mut pids: HashMap<(String, String), HashSet<u32>> = HashMap::new();
+		pids.insert(("claude".into(), "/live".into()), HashSet::from([live]));
+		// Dead alongside a *live-but-unrelated* pid still dead → any() false → skip.
+		pids.insert(("claude".into(), "/dead".into()), HashSet::from([dead]));
+		// (claude,/unseen) intentionally absent → never scanned → still counts.
+
+		// /live (alive) + /unseen (fallback) count; /dead skipped.
+		assert_eq!(waiting_count(&d, &[], &pids), 2);
+		// With no pid info at all, all three count.
+		assert_eq!(waiting_count(&d, &[], &HashMap::new()), 3);
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn clear_resumed_waiting_removes_only_stale_matching_files() {
+		let d = std::env::temp_dir().join(format!("msm-crw-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&d).unwrap();
+		let w = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
+		// Stale waiting event (ts=100) for (claude,/a) — predates the resume evidence.
+		w("stale.json", r#"{"agent":"claude","cwd":"/a","state":"waiting","ts":100}"#);
+		// A newer waiting event (ts=1000) for the same key — a sibling still waiting.
+		w("fresh.json", r#"{"agent":"claude","cwd":"/a","state":"waiting","ts":1000}"#);
+		// A working file for the key — must be left alone (not waiting).
+		w("work.json", r#"{"agent":"claude","cwd":"/a","state":"working","ts":50}"#);
+		// A waiting file for a different agent — untouched.
+		w("other.json", r#"{"agent":"codex","cwd":"/a","state":"waiting","ts":100}"#);
+
+		// Resume proven by a log write at ts≈200 → only events with ts+2 < 200 go.
+		let mtime = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(200);
+		clear_resumed_waiting(&d, "claude", "/a", mtime);
+
+		assert!(!d.join("stale.json").exists()); // removed (100+2 < 200)
+		assert!(d.join("fresh.json").exists()); // kept (1000+2 !< 200) — sibling wait
+		assert!(d.join("work.json").exists()); // kept (not waiting)
+		assert!(d.join("other.json").exists()); // kept (different agent)
 		std::fs::remove_dir_all(&d).ok();
 	}
 

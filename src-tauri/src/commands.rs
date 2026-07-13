@@ -170,13 +170,20 @@ pub fn get_settings(state: State<AppState>) -> Settings {
 	state.config.lock().unwrap().settings.clone()
 }
 
-/// Replace app-wide settings and persist.
+/// Replace app-wide settings and persist. Refreshes the tray so a change to the
+/// waiting title-badge toggle applies at once, not on the next poll tick.
 #[tauri::command]
-pub fn update_settings(state: State<AppState>, settings: Settings) -> Result<(), AppError> {
+pub fn update_settings(
+	app: tauri::AppHandle,
+	state: State<AppState>,
+	settings: Settings,
+) -> Result<(), AppError> {
 	{
 		state.config.lock().unwrap().settings = settings;
 	}
-	persist(&state)
+	persist(&state)?;
+	crate::update_tray_icon(&app);
+	Ok(())
 }
 
 /// Build initial `AppState` by loading config from disk (returns default if missing).
@@ -192,6 +199,8 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		visible: std::sync::atomic::AtomicBool::new(false),
 		update_in_flight: std::sync::atomic::AtomicBool::new(false),
 		pending_update: std::sync::Mutex::new(None),
+		waiting_count: std::sync::atomic::AtomicUsize::new(0),
+		last_agent_pids: std::sync::Mutex::new(std::collections::HashMap::new()),
 	}
 }
 

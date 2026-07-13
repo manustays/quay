@@ -25,30 +25,78 @@ use tauri::{
 /// overlapping this one.
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 86_400;
 
-/// Reflect the aggregate service status on the tray icon: the buoy's beacon glows
-/// red (any error) or amber (any starting) via colored non-template variants;
-/// otherwise the monochrome template icon (theme-adaptive) is restored.
+/// Reflect service health *and* waiting agents on the tray. Icon precedence:
+/// any service `Error` (red) > any waiting agent (amber submerged-buoy glow) >
+/// any service `Starting` (amber) > nominal (monochrome template, theme-adaptive).
+/// Error stays top (a broken managed service is a hard failure); waiting beats
+/// starting — it's the headline signal, and its distinct glyph separates it from
+/// plain amber. When the `waitingTitleBadge` setting is on and agents are waiting,
+/// the menubar title shows the count; otherwise the title is cleared.
 ///
 /// Safe to call from any thread (e.g. the health-poll loop): tray mutation is
-/// dispatched to the main thread, and the aggregate is computed inside the closure
-/// so the icon reflects the statuses at apply time, not at call time.
+/// dispatched to the main thread, and the inputs are read inside the closure so the
+/// icon reflects state at apply time, not at call time. The waiting count itself is
+/// refreshed separately by [`refresh_waiting_badge`].
 pub fn update_tray_icon(app: &tauri::AppHandle) {
+	use std::sync::atomic::Ordering;
 	let app = app.clone();
 	let _ = app.clone().run_on_main_thread(move || {
+		let st = app.state::<state::AppState>();
+		// Two short, sequential (never nested) locks: aggregate the statuses, then
+		// read the one settings flag. The waiting count is a lock-free atomic.
 		let aggregate = {
-			let st = app.state::<state::AppState>();
 			let statuses = st.statuses.lock().unwrap();
 			health::aggregate_status(statuses.values().copied())
 		};
-		let (icon, is_template) = match aggregate {
-			Some(model::Status::Error) => (tauri::include_image!("icons/tray-error.png"), false),
-			Some(_) => (tauri::include_image!("icons/tray-starting.png"), false),
-			None => (tauri::include_image!("icons/tray.png"), true),
+		let waiting = st.waiting_count.load(Ordering::Relaxed);
+		let title_badge = st.config.lock().unwrap().settings.waiting_title_badge;
+		let (icon, is_template) = match (aggregate, waiting > 0) {
+			(Some(model::Status::Error), _) => (tauri::include_image!("icons/tray-error.png"), false),
+			(_, true) => (tauri::include_image!("icons/tray-waiting.png"), false),
+			(Some(_), false) => (tauri::include_image!("icons/tray-starting.png"), false),
+			(None, false) => (tauri::include_image!("icons/tray.png"), true),
 		};
 		if let Some(tray) = app.tray_by_id("main") {
 			let _ = tray.set_icon_with_as_template(Some(icon), is_template);
+			let title = (title_badge && waiting > 0).then(|| format!("{waiting}"));
+			let _ = tray.set_title(title.as_deref());
 		}
 	});
+}
+
+/// Recompute the waiting-agent count from the hook-state files and refresh the tray.
+/// Called from the always-on poll loop (`health::spawn_poll_loop`) so the menubar
+/// reflects waiting agents even while the popover — and thus the heavy radar scan —
+/// is closed. Cheap: a directory read of small JSON files plus a `kill(pid, 0)`
+/// liveness check per waiting file (from the PIDs `scan` stamped), no `ps`/`sysinfo`.
+pub fn refresh_waiting_badge(app: &tauri::AppHandle) {
+	use std::sync::atomic::Ordering;
+	let st = app.state::<state::AppState>();
+	let ignored = st.config.lock().unwrap().settings.ignored_agents.clone();
+	let dir = st.dir.join("agent-state");
+	let count = {
+		let pids = st.last_agent_pids.lock().unwrap().clone();
+		agent_radar::waiting_count(&dir, &ignored, &pids)
+	};
+	// A phantom count — a `waiting` file whose session died without a clearing
+	// hook — otherwise self-heals only on a popover scan. When the badge would
+	// show, sweep orphaned waiting files (crashed/exited: no live process, event
+	// older than the grace) so it clears without one. The process enumeration
+	// runs only in this `count > 0` branch, so it's free while nothing waits.
+	let count = if count > 0 {
+		agent_radar::prune_orphan_hook_states(
+			&dir,
+			&agent_radar::live_agent_keys(&ignored),
+			std::time::SystemTime::now(),
+		);
+		let pids = st.last_agent_pids.lock().unwrap().clone();
+		agent_radar::waiting_count(&dir, &ignored, &pids)
+	} else {
+		count
+	};
+	if st.waiting_count.swap(count, Ordering::Relaxed) != count {
+		update_tray_icon(app);
+	}
 }
 
 /// Check GitHub for a newer release; if the user agrees, download, install, and

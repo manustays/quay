@@ -399,7 +399,7 @@ export function Popup({
 				{/* Terminal agent sessions found by the agent radar; same-folder
 				    sessions club into one AgentFolderRow. */}
 				{query === '' && agents.length > 0 && (
-					<Collapsible className="mt-0.5">
+					<Collapsible defaultOpen className="mt-0.5">
 						<CollapsibleTrigger className="group/agents flex w-full items-center gap-1 rounded-md px-2 py-1.5 font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase transition-colors hover:text-foreground">
 							<ChevronRight className="size-3 transition-transform group-data-[state=open]/agents:rotate-90" />
 							Agents ({agents.length})

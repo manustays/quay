@@ -7,13 +7,22 @@
 > A native macOS menubar app to start, stop, and monitor your local dev services — Node/Python servers, Homebrew services, Docker containers, and long-running terminal agents — from one place, with live CPU/memory metrics.
 
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT" /></a>
-<a href="#requirements"><img src="https://img.shields.io/badge/platform-macOS-black.svg" alt="Platform: macOS" /></a>
+<a href="#requirements"><img src="https://img.shields.io/badge/macOS-v10.15+-black.svg" alt="Platform: macOS" /></a>
 <a href="https://tauri.app"><img src="https://img.shields.io/badge/built%20with-Tauri%202-24C8DB.svg" alt="Built with Tauri" /></a>
 <a href="https://abhi.am" target="_blank"><img src="https://img.shields.io/badge/about-me-blue" alt="About Abhishek" /></a>
 <a href="https://github.com/sponsors/manustays"><img src="https://img.shields.io/github/sponsors/manustays?label=Sponsor&logo=githubsponsors" alt="Support my work" /></a>
 
 </div>
 
+
+## Quick Install
+
+#### Homebrew (recommended)
+```bash
+brew install --cask manustays/tools/quay
+```
+
+_or, download the .dmg from the [latest release](https://github.com/manustays/quay/releases/latest)._
 
 ## The problem
 
@@ -115,7 +124,7 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 | [Architecture](docs/architecture.md) | How the Rust core and webview fit together |
 | [Troubleshooting](docs/troubleshooting.md) | Common issues and fixes |
 
-## How it works (in one paragraph)
+## How does it work
 
 A Rust core owns all process supervision and state; a small vanilla-TypeScript webview is the popover UI. They talk over Tauri commands (UI → Rust) and events (Rust → UI). Background services are spawned as child processes in their own process group (so the whole tree can be stopped cleanly), with stdout/stderr written to a per-item log file. A background poll loop checks each item's process and port and pushes status changes to the UI. Everything dies with the app — quit from the tray's right-click **Quit** and owned children are terminated. See [Architecture](docs/architecture.md).
 

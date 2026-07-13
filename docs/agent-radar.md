@@ -51,6 +51,36 @@ Each session's dot is one of:
   input request. In a clubbed folder row, one waiting member turns the whole
   folder's pill amber.
 
+**Menubar signal (works while the popover is closed).** A waiting agent also
+switches the *tray icon* to the amber submerged-buoy glyph (`tray-waiting`), and —
+when the `waitingTitleBadge` setting is on — shows the waiting count in the menubar
+title (e.g. `●2`). Unlike the in-popover dots, this is driven by the always-on poll
+loop reading the hook-state files (`refresh_waiting_badge` → `waiting_count`), so it
+pulls attention even when the popover is shut. Icon precedence puts a service `Error`
+above waiting; waiting above `Starting`. The count dedups by `(agent, cwd)` and honors
+`ignored_agents`.
+
+**Keeping the badge honest.** The badge and the in-popover dots read the same files
+but the dots apply corrections the raw count used to miss, so a stale `waiting` file
+could badge the tray with no matching row. Two mechanisms now keep them in step:
+
+- **Resume reconcile.** When a popover-open scan sees a session the resume backstop
+  downgraded off `waiting` (its log advanced past the waiting event), it *deletes*
+  that stale `waiting` file (`clear_resumed_waiting`), so the badge stops counting
+  what the rows already hide. It only removes a `waiting` event whose own `ts`
+  predates the resume evidence, so a sibling session still genuinely waiting in the
+  same folder (newer event) is preserved.
+- **PID liveness.** Each scan stamps the live PIDs it resolved per `(agent, cwd)`
+  into `last_agent_pids`; `waiting_count` drops a waiting key whose every stamped PID
+  is dead (`kill(pid, 0)`) — a *crashed-while-waiting* session clears without waiting
+  for the 10-minute dead-session prune.
+
+Remaining ceilings: PIDs are keyed by `(agent, cwd)`, so a dead waiting session
+sharing a folder with a live sibling still badges until the next popover-open scan;
+`last_agent_pids` is empty after an app restart until the first scan, so a crash then
+reverts to prune-only behavior; and a recycled PID can read alive. All self-heal on a
+popover-open scan.
+
 There are two sources for the state, and the better one wins:
 
 1. **Hooks (authoritative).** With the radar hooks installed for an agent (one

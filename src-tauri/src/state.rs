@@ -1,9 +1,9 @@
 use crate::model::{AppConfig, Status, UpdateInfo};
 use crate::supervisor::Running;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, AtomicUsize};
 
 /// All shared, mutable app state behind locks.
 pub struct AppState {
@@ -28,6 +28,17 @@ pub struct AppState {
 	/// webview has mounted its listener (menubar app starts hidden), so the frontend
 	/// also pulls this on mount via `get_pending_update`.
 	pub pending_update: Mutex<Option<UpdateInfo>>,
+	/// Number of distinct waiting agent (agent, cwd) pairs, refreshed by the
+	/// always-on poll loop (`health::spawn_poll_loop`) from the hook-state files so
+	/// the menubar reflects waiting agents even while the popover is closed. Read by
+	/// `update_tray_icon` to pick the waiting glyph and the title-badge count.
+	pub waiting_count: AtomicUsize,
+	/// Live PIDs the radar last saw per `(agent, cwd)`, stamped by `agent_radar::scan`
+	/// (popover-open only). The always-on badge path (`waiting_count`) consults this to
+	/// drop a waiting file whose every seen PID is now dead — a crashed-while-waiting
+	/// session — without doing its own `ps`. A key absent here was never scanned, so it
+	/// still counts (fallback). Cleared on restart; repopulated on the next scan.
+	pub last_agent_pids: Mutex<HashMap<(String, String), HashSet<u32>>>,
 }
 
 impl AppState {

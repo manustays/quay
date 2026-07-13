@@ -151,6 +151,14 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 							/>
 						</label>
 
+						<label className="flex items-center justify-between gap-2 text-[13px]">
+							<span>Show waiting count in menubar</span>
+							<Switch
+								checked={settings.waitingTitleBadge}
+								onCheckedChange={(v) => set({ waitingTitleBadge: v })}
+							/>
+						</label>
+
 						{hooks.length > 0 && (
 							<div className="grid gap-1.5">
 								<Label className="text-xs text-muted-foreground">

@@ -161,6 +161,9 @@ pub fn spawn_poll_loop(app: AppHandle) {
 			secs
 		};
 		poll_once(&app);
+		// Always-on: refresh the waiting-agent menubar signal even while the popover
+		// (and its heavier radar scan) is closed.
+		crate::refresh_waiting_badge(&app);
 		std::thread::sleep(std::time::Duration::from_secs(interval));
 	});
 }

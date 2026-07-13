@@ -244,6 +244,9 @@ pub fn spawn_scan_loop(app: AppHandle) {
 			// Agent radar shares this loop: same visibility gate (the ps+sysinfo
 			// work itself is skipped while hidden, not just the emit), same cadence.
 			let agents = crate::agent_radar::scan(&app, &mut codex_meta);
+			// scan just stamped live PIDs and reconciled resumed waiting files;
+			// recompute the badge now so it matches the rows the moment they emit.
+			crate::refresh_waiting_badge(&app);
 			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
 				let _ = app.emit("agents_discovered", &agents);
 			}
