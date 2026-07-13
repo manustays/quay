@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
-import { ChevronRight, CirclePower, Play, Plus, Search, Settings, Square, X } from 'lucide-react';
+import { ChevronRight, Play, Plus, Search, Settings, Square, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { aggregateGroupMetrics, aggregateGroupStatus, groupAgentsByCwd, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status, type UpdateInfo } from '../model';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
-import { reorder, startItem, stopAll, stopItem } from '../ipc';
+import { reorder, startItem, stopItem } from '../ipc';
 import { AgentFolderRow, AgentRow } from './AgentRow';
 import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
@@ -206,13 +206,6 @@ export function Popup({
 				}
 			: {};
 
-	const handleStopAll = async () => {
-		if (confirm('Stop all running services?')) {
-			await stopAll();
-			onChange();
-		}
-	};
-
 	/** Alert the reasons of any rejected results (settled actions stay silent otherwise). */
 	const surfaceFailures = (results: PromiseSettledResult<unknown>[]) => {
 		const failed = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
@@ -361,20 +354,6 @@ export function Popup({
 						<TooltipContent>Search</TooltipContent>
 					</Tooltip>
 				)}
-				<Tooltip>
-					<TooltipTrigger asChild>
-						<Button
-							variant="ghost"
-							size="icon-sm"
-							onClick={handleStopAll}
-							aria-label="Stop all services"
-							className="text-muted-foreground hover:text-destructive"
-						>
-							<CirclePower />
-						</Button>
-					</TooltipTrigger>
-					<TooltipContent>Stop all</TooltipContent>
-				</Tooltip>
 			</header>
 
 			{updateInfo && <UpdateBanner info={updateInfo} onDismiss={onDismissUpdate} />}
