@@ -1,3 +1,26 @@
+# [0.17.0](https://github.com/manustays/quay/compare/v0.16.0...v0.17.0) (2026-07-15)
+
+
+### Bug Fixes
+
+* **build:** extract quay-hook to workspace crate so universal bundle builds ([85189da](https://github.com/manustays/quay/commit/85189da0d466d5a3257e68efd66c363d9b08f7a1))
+* **radar:** clear menubar count when waiting badge toggled off ([bf64d41](https://github.com/manustays/quay/commit/bf64d41ea1c3e2ce78d111592e1622f5b4d14785))
+
+
+### Features
+
+* **radar:** agent-keyed hook state, trust fresh working ([c42b324](https://github.com/manustays/quay/commit/c42b32474c2fe655ab710f38559255b8802c6ae4))
+* **radar:** bundle quay-hook sidecar + stable-path install ([a6487e8](https://github.com/manustays/quay/commit/a6487e8825aeb3abd147c94fbebb993d9cdfb929))
+* **radar:** hooks own state+name, skip agent-file reads ([d9554ff](https://github.com/manustays/quay/commit/d9554ffcd7e66d086f16be4d26a250ef323dc96f))
+* **radar:** jump-to-session + hook-based waiting state ([1264557](https://github.com/manustays/quay/commit/1264557960d43357b56f4d4c18cf3020ae355d14))
+* **radar:** jump-to-session for cmux via deep link ([7fc9b38](https://github.com/manustays/quay/commit/7fc9b38f3f2c1f2ef85ba6c8c24e36939659c9c2))
+* **radar:** per-agent hook install backend ([24b0c88](https://github.com/manustays/quay/commit/24b0c88c614639fedbc0af037cc161b8c1409f79))
+* **radar:** waiting title badge off by default ([f11db5a](https://github.com/manustays/quay/commit/f11db5a6e2343e03aeff1e017fa0de00a19e6623))
+* **radar:** waiting-agent menubar badge + orphan sweep ([2b6bffe](https://github.com/manustays/quay/commit/2b6bffe9ba9ac39e75f4c50aa068475bc7fed305))
+* **ui:** hook install section in settings ([af33deb](https://github.com/manustays/quay/commit/af33debdcfdbfea7c4ff145158eb49a7472f4173))
+* **ui:** working/idle/waiting agent states ([cf16435](https://github.com/manustays/quay/commit/cf16435ab330b959c8b14cdef9b1a0f05e66f05b))
+* **update:** changelog link + release notes in manifest ([14c5ff3](https://github.com/manustays/quay/commit/14c5ff3590a3bc45c2ae0d2cea36989623b03c43))
+
 # [0.16.0](https://github.com/manustays/quay/compare/v0.15.0...v0.16.0) (2026-07-09)
 
 
