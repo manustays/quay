@@ -139,7 +139,7 @@ for Claude Code. `quay-hook` takes `<state> [agent]` — the agent defaults to
 `claude` when omitted, so a pre-existing single-arg install keeps working.
 
 ```sh
-cargo build --release --manifest-path src-tauri/Cargo.toml --bin quay-hook
+cargo build --release --manifest-path src-tauri/Cargo.toml -p quay-hook
 cp src-tauri/target/release/quay-hook ~/.local/bin/quay-hook
 ```
 

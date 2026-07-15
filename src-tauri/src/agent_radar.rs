@@ -560,7 +560,7 @@ fn is_active(log_mtime: Option<SystemTime>, cpu_percent: f32, now: SystemTime) -
 }
 
 /// One hook-reported session state, written by `quay-hook` (see
-/// `src/bin/quay-hook.rs`): the mapped state string and the event time as unix
+/// `crates/quay-hook/src/main.rs`): the mapped state string and the event time as unix
 /// seconds. Keyed externally by (agent, cwd).
 struct HookState {
 	state: String,

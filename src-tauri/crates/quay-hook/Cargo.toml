@@ -1,0 +1,15 @@
+# The Claude Code hook helper. A separate crate (not a `[[bin]]` of the app)
+# on purpose: as an extra bin target of `quay` it would be auto-added to the
+# .app bundle, and `tauri build --target universal-apple-darwin` never lipos
+# secondary bins — the bundler then fails copying a universal quay-hook that
+# was never produced. As its own crate it ships only as the resource the app
+# installs (see ../../tauri.conf.json `bundle.resources`).
+[package]
+name = "quay-hook"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+serde_json = { version = "1", features = ["preserve_order"] }
+dirs = "5"
