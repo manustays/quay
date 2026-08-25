@@ -20,6 +20,51 @@ use tauri::{
 	WindowEvent,
 };
 
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct TrayAnchor {
+	native_point: (f64, f64),
+}
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct TrayAnchorState(std::sync::Mutex<Option<TrayAnchor>>);
+
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct PopoverMonitorState(std::sync::Mutex<Option<(i32, i32)>>);
+
+#[cfg(target_os = "macos")]
+#[derive(Clone, Copy)]
+struct MacScreenGeometry {
+	origin: (f64, f64),
+	visible_origin: (f64, f64),
+	visible_size: (f64, f64),
+}
+
+#[cfg(target_os = "macos")]
+fn mac_screen_geometry(anchor: TrayAnchor) -> Option<MacScreenGeometry> {
+	use objc2_app_kit::NSScreen;
+	use objc2_foundation::MainThreadMarker;
+
+	let mtm = MainThreadMarker::new()?;
+	let (x, y) = anchor.native_point;
+	NSScreen::screens(mtm).iter().find_map(|screen| {
+		let frame = screen.frame();
+		let contains = x >= frame.origin.x
+			&& x < frame.origin.x + frame.size.width
+			&& y >= frame.origin.y
+			&& y < frame.origin.y + frame.size.height;
+		if !contains { return None; }
+		let visible = screen.visibleFrame();
+		Some(MacScreenGeometry {
+			origin: (frame.origin.x, frame.origin.y),
+			visible_origin: (visible.origin.x, visible.origin.y),
+			visible_size: (visible.size.width, visible.size.height),
+		})
+	})
+}
+
 /// How often the background loop re-checks for updates after the initial launch
 /// check (seconds). Daily. The `update_in_flight` guard keeps a manual check from
 /// overlapping this one.
@@ -282,20 +327,60 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
 	result
 }
 
-/// Re-pin the popover under the tray icon.
+/// Re-pin the popover under the latest clicked tray icon.
 ///
-/// The positioner plugin unwraps `current_monitor()`; a window macOS
-/// considers off-screen (e.g. hidden/ordered-out — a late `resize_popover`
-/// after hide-on-blur hits this) has no monitor, and moving it would panic
-/// the main thread and kill the app. Skip the re-pin instead: the next
-/// `toggle_popover` re-anchors before showing.
-fn pin_under_tray(win: &tauri::WebviewWindow) {
+/// On macOS, keep the complete placement path in AppKit coordinates. Tauri's
+/// reported physical monitor sizes and origins use inconsistent scaling on
+/// mixed-DPI desktops, so translating its tray rectangle back into AppKit can
+/// select the wrong display or strand the window off-screen. The mouse is over
+/// the status item when the click arrives, making its native location a stable
+/// anchor in the same coordinate space as `NSScreen` and `NSWindow`.
+fn pin_under_tray(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
+	#[cfg(not(target_os = "macos"))]
 	if matches!(win.current_monitor(), Ok(Some(_))) {
 		let _ = tauri_plugin_positioner::WindowExt::move_window(
 			win,
 			tauri_plugin_positioner::Position::TrayCenter,
 		);
 	}
+
+	#[cfg(target_os = "macos")]
+	unsafe {
+		use objc2_app_kit::NSWindow;
+		use objc2_foundation::NSPoint;
+
+		let Some(anchor) = *app.state::<TrayAnchorState>().0.lock().unwrap() else { return; };
+		let Some(screen) = mac_screen_geometry(anchor) else { return; };
+		let (mouse_x, _) = anchor.native_point;
+		let popup_width = 380.0;
+		let ideal_x = mouse_x - popup_width / 2.0;
+		let x = ideal_x.clamp(
+			screen.visible_origin.0,
+			(screen.visible_origin.0 + screen.visible_size.0 - popup_width)
+				.max(screen.visible_origin.0),
+		);
+		let cocoa_y = screen.visible_origin.1 + screen.visible_size.1;
+		let Ok(ns_window) = win.ns_window() else { return; };
+		let ns_window: &NSWindow = &*ns_window.cast();
+		ns_window.setFrameTopLeftPoint(NSPoint::new(x, cocoa_y));
+		*app.state::<PopoverMonitorState>().0.lock().unwrap() =
+			Some((screen.origin.0.round() as i32, screen.origin.1.round() as i32));
+	}
+}
+
+#[cfg(target_os = "macos")]
+fn tray_is_on_current_monitor(app: &tauri::AppHandle) -> bool {
+	let Some(anchor) = *app.state::<TrayAnchorState>().0.lock().unwrap() else { return true; };
+	let target_position = match mac_screen_geometry(anchor) {
+		Some(screen) => (screen.origin.0.round() as i32, screen.origin.1.round() as i32),
+		None => return false,
+	};
+	app.state::<PopoverMonitorState>()
+		.0
+		.lock()
+		.unwrap()
+		.as_ref()
+		.is_some_and(|current| current == &target_position)
 }
 
 /// Toggle the popover window: show+focus if hidden, hide if visible.
@@ -303,12 +388,20 @@ fn toggle_popover(app: &tauri::AppHandle) {
 	use std::sync::atomic::Ordering;
 	if let Some(win) = app.get_webview_window("main") {
 		if win.is_visible().unwrap_or(false) {
+			#[cfg(target_os = "macos")]
+			if !tray_is_on_current_monitor(app) {
+				// A click on another display moves the open popover there instead of
+				// consuming the click as a close, so each menubar icon feels local.
+				pin_under_tray(app, &win);
+				let _ = win.set_focus();
+				return;
+			}
 			// Mirror `visible` to the actual outcome of the window op.
 			if win.hide().is_ok() {
 				app.state::<state::AppState>().visible.store(false, Ordering::Relaxed);
 			}
 		} else {
-			pin_under_tray(&win);
+			pin_under_tray(app, &win);
 			if win.show().is_ok() {
 				app.state::<state::AppState>().visible.store(true, Ordering::Relaxed);
 				let _ = win.set_focus();
@@ -320,9 +413,9 @@ fn toggle_popover(app: &tauri::AppHandle) {
 /// Resize the popover to fit its content and re-pin it under the tray.
 /// The frontend measures its own shell height (clamped there to the tray
 /// monitor's usable height) and reports it; we floor at the 520 default and
-/// backstop the ceiling. Re-anchoring with TrayCenter keeps the top edge fixed
-/// under the tray so the window grows downward, whatever direction macOS's
-/// `set_size` would otherwise pick.
+/// backstop the ceiling. Re-anchoring keeps the top edge fixed under the tray
+/// so the window grows downward, whatever direction macOS's `set_size` would
+/// otherwise pick.
 #[tauri::command]
 fn resize_popover(app: tauri::AppHandle, height: f64) {
 	if let Some(win) = app.get_webview_window("main") {
@@ -331,7 +424,7 @@ fn resize_popover(app: tauri::AppHandle, height: f64) {
 		// work-area if multi-monitor sizing ever matters.
 		let h = height.clamp(520.0, 1200.0);
 		let _ = win.set_size(tauri::LogicalSize::new(380.0, h));
-		pin_under_tray(&win);
+		pin_under_tray(&app, &win);
 	}
 }
 
@@ -389,6 +482,10 @@ pub fn run() {
 
 			let dir = store::config_dir()?;
 			app.manage(commands::init_state(dir));
+			#[cfg(target_os = "macos")]
+			app.manage(TrayAnchorState::default());
+			#[cfg(target_os = "macos")]
+			app.manage(PopoverMonitorState::default());
 
 			// Refresh an already-installed quay-hook helper if the bundled bytes
 			// changed (i.e. the app updated). Never creates it unsolicited —
@@ -534,6 +631,12 @@ pub fn run() {
 						..
 					} = event
 					{
+						#[cfg(target_os = "macos")]
+						{
+							let point = objc2_app_kit::NSEvent::mouseLocation();
+							*tray.app_handle().state::<TrayAnchorState>().0.lock().unwrap() =
+								Some(TrayAnchor { native_point: (point.x, point.y) });
+						}
 						toggle_popover(tray.app_handle());
 					}
 				})
