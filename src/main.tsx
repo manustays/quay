@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import '@fontsource-variable/space-grotesk';
+import '@fontsource-variable/space-grotesk/index.css';
 import { App } from './App';
 import './index.css';
 

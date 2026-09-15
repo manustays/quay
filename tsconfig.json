@@ -16,8 +16,7 @@
     /* React */
     "jsx": "react-jsx",
 
-    /* Path aliases */
-    "baseUrl": ".",
+    /* Path aliases (relative to this file; no baseUrl — deprecated in TS 6) */
     "paths": {
       "@/*": ["./src/*"]
     },
