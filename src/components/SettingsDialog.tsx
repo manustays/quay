@@ -94,7 +94,7 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 
 	return (
 		<Dialog open={open} onOpenChange={onOpenChange}>
-			<DialogContent className="sm:max-w-[320px]">
+			<DialogContent className="max-h-[88vh] overflow-y-auto sm:max-w-[320px]">
 				<DialogHeader>
 					<DialogTitle>Settings</DialogTitle>
 				</DialogHeader>
