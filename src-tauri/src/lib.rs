@@ -42,19 +42,30 @@ struct MacScreenGeometry {
 	visible_size: (f64, f64),
 }
 
+/// Whether an `NSEvent::mouseLocation` point lies on a screen frame (AppKit
+/// coordinates, y up). The cursor's y spans `(origin.y, origin.y + height]`:
+/// the top pixel row reports `y == maxY` — exactly where a menubar click lands
+/// after flinging the cursor to the top edge — while `y == origin.y` belongs to
+/// the screen stacked below. x spans `[origin.x, origin.x + width)` as usual.
+#[cfg(any(target_os = "macos", test))]
+fn cocoa_frame_contains(origin: (f64, f64), size: (f64, f64), point: (f64, f64)) -> bool {
+	let (x, y) = point;
+	x >= origin.0 && x < origin.0 + size.0 && y > origin.1 && y <= origin.1 + size.1
+}
+
 #[cfg(target_os = "macos")]
 fn mac_screen_geometry(anchor: TrayAnchor) -> Option<MacScreenGeometry> {
 	use objc2_app_kit::NSScreen;
 	use objc2_foundation::MainThreadMarker;
 
 	let mtm = MainThreadMarker::new()?;
-	let (x, y) = anchor.native_point;
 	NSScreen::screens(mtm).iter().find_map(|screen| {
 		let frame = screen.frame();
-		let contains = x >= frame.origin.x
-			&& x < frame.origin.x + frame.size.width
-			&& y >= frame.origin.y
-			&& y < frame.origin.y + frame.size.height;
+		let contains = cocoa_frame_contains(
+			(frame.origin.x, frame.origin.y),
+			(frame.size.width, frame.size.height),
+			anchor.native_point,
+		);
 		if !contains { return None; }
 		let visible = screen.visibleFrame();
 		Some(MacScreenGeometry {
@@ -714,4 +725,24 @@ pub fn run() {
 				commands::shutdown_stop_non_terminal(&st);
 			}
 		});
+}
+
+#[cfg(test)]
+mod tests {
+	use super::cocoa_frame_contains;
+
+	#[test]
+	fn cocoa_frame_contains_owns_top_edge_not_bottom() {
+		// Lower 1512×982 screen at the origin; upper screen stacked directly above.
+		let lower = ((0.0, 0.0), (1512.0, 982.0));
+		let upper = ((0.0, 982.0), (3440.0, 1440.0));
+		// Top pixel row of the lower screen reports y == maxY: lower owns it.
+		assert!(cocoa_frame_contains(lower.0, lower.1, (400.0, 982.0)));
+		assert!(!cocoa_frame_contains(upper.0, upper.1, (400.0, 982.0)));
+		// Top edge of the upper (outermost) screen still lands on it.
+		assert!(cocoa_frame_contains(upper.0, upper.1, (400.0, 2422.0)));
+		// Horizontal bounds stay half-open.
+		assert!(cocoa_frame_contains(lower.0, lower.1, (0.0, 500.0)));
+		assert!(!cocoa_frame_contains(lower.0, lower.1, (1512.0, 500.0)));
+	}
 }
