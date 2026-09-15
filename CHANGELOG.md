@@ -1,3 +1,17 @@
+# [0.18.0](https://github.com/manustays/quay/compare/v0.17.0...v0.18.0) (2026-09-15)
+
+
+### Bug Fixes
+
+* **macos:** anchor popover to clicked display ([a331212](https://github.com/manustays/quay/commit/a33121223d832e311e5324e91d8cfc0341eafad6))
+* **macos:** include top edge in screen hit-test ([dc72c5d](https://github.com/manustays/quay/commit/dc72c5d00c5585aae9c5c153d0ef6ebec14d6a71))
+* make settings dialog scrollable ([b79090b](https://github.com/manustays/quay/commit/b79090ba0b755860e36d0bf7d018fdbe5442ecaa))
+
+
+### Features
+
+* **browser:** configurable open-in-browser URL ([#7](https://github.com/manustays/quay/issues/7)) ([45db443](https://github.com/manustays/quay/commit/45db4439453ace105cc16d09ccf1c70d83587243))
+
 # [0.17.0](https://github.com/manustays/quay/compare/v0.16.0...v0.17.0) (2026-07-15)
 
 
