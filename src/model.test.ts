@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
 	aggregateGroupMetrics,
 	aggregateGroupStatus,
+	browserUrlFor,
 	groupAgentsByCwd,
 	groupItems,
 	matchesSearch,
@@ -16,7 +17,7 @@ const base: ManagedItem = {
 	id: '1', name: 'myapp', kind: 'project', dir: '/x', startCmd: 'npm run dev',
 	stopCmd: null, port: 5173, runMode: 'background', brewFormula: null,
 	dockerImage: null, containerName: null, stack: null, group: null, order: 0,
-	favorite: false, env: {}, healthPath: null, autoStart: false,
+	favorite: false, env: {}, healthPath: null, browserUrl: null, autoStart: false,
 };
 
 describe('model helpers', () => {
@@ -37,6 +38,14 @@ describe('model helpers', () => {
 		expect(moveInList(['a', 'b', 'c'], 0, 2)).toEqual(['b', 'c', 'a']);
 		expect(moveInList(['a', 'b', 'c'], 2, 0)).toEqual(['c', 'a', 'b']);
 		expect(moveInList(['a', 'b', 'c'], 1, 1)).toEqual(['a', 'b', 'c']);
+	});
+	it('browserUrlFor defaults to localhost, substitutes {port} in a template', () => {
+		expect(browserUrlFor(base)).toBe('http://localhost:5173');
+		expect(browserUrlFor({ ...base, browserUrl: '  ' })).toBe('http://localhost:5173');
+		expect(browserUrlFor({ ...base, browserUrl: ' http://127.0.0.1:{port}/index.html ' }))
+			.toBe('http://127.0.0.1:5173/index.html');
+		expect(browserUrlFor({ ...base, port: null, browserUrl: 'http://my.app.localhost' }))
+			.toBe('http://my.app.localhost');
 	});
 	it('statusDot maps each status', () => {
 		expect(statusDot('running')).toContain('running');

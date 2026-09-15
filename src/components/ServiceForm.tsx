@@ -157,6 +157,7 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 			dockerImage: data.dockerImage || null,
 			containerName: data.containerName?.trim() || null,
 			healthPath: data.healthPath || null,
+			browserUrl: data.browserUrl?.trim() || null,
 			group: data.group?.trim() || null,
 		};
 		// Adding a Docker service while the daemon is down: prompt to start it so the
@@ -257,6 +258,14 @@ export function ServiceForm({ open, item, groups, onOpenChange, onSaved }: Servi
 
 					<Field label="Port">
 						<Input type="number" value={portText} onChange={(e) => setPortText(e.target.value)} />
+					</Field>
+
+					<Field label="Browser URL (optional)">
+						<Input
+							value={data.browserUrl ?? ''}
+							onChange={(e) => set({ browserUrl: e.target.value })}
+							placeholder="http://localhost:{port}"
+						/>
 					</Field>
 
 					{!isDocker && !isCommand && (

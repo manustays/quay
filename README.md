@@ -45,7 +45,7 @@ If you build a lot of local services, you know the dance: remember which folder,
 - **Start / stop** each item from the menubar. Background services run headless (no foreground terminal); their output is logged to a file.
 - **Live status** — process liveness **plus** a port/HTTP health check, polled in the background and pushed to the UI (no manual refresh).
 - **Resource metrics** — live CPU % and memory per item (including per-container `docker stats`), sampled while the popover is open.
-- **Open in browser** — one click opens `http://localhost:<port>`.
+- **Open in browser** — one click opens `http://localhost:<port>`, or a per-service URL (`http://127.0.0.1:{port}/app`, a LAN IP, …).
 - **Open a terminal** already `cd`'d into the service's folder, when you actually need to watch logs.
 - **Auto-detect on add** — pick a folder and the app reads `package.json` / `requirements.txt` / `.env` to pre-fill the start command and port.
 - **Port radar** — dev servers you started outside Quay show up in a **Detected** section (project name + framework icon), with one-click **adopt as service**, kill, or ignore. A stopped item whose port is taken by another process gets a ⚠ collision badge.

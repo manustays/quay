@@ -61,6 +61,7 @@ Each registered service:
   "favorite": false,           // shown in the FAVORITES section when true
   "env": { "NODE_ENV": "development" }, // merged into the process env at spawn
   "healthPath": null,          // null = TCP port check; e.g. "/health" = HTTP 2xx check
+  "browserUrl": null,          // null = http://localhost:<port>; e.g. "http://127.0.0.1:{port}/index.html"
   "autoStart": false           // start automatically when the app launches
 }
 ```
@@ -86,6 +87,7 @@ Each registered service:
 | `favorite` | boolean | Pin to the FAVORITES section. |
 | `env` | object (string→string) | Extra environment variables merged onto your shell env at spawn. **Plain text — dev variables only, not secrets.** |
 | `healthPath` | string \| null | If set, status uses an HTTP `GET http://localhost:<port><healthPath>` and treats a 2xx as healthy (requires a `port`). If `null`, a plain TCP connect is used. Ignored for brew items. |
+| `browserUrl` | string \| null | URL opened by ↗ **Open in browser** and copied by the `:port` label. `{port}` is replaced with `port` (e.g. `http://127.0.0.1:{port}`, `http://192.168.1.42:{port}`, `http://localhost:{port}/index.html`). Must be `http://` or `https://` — anything else is rejected on save. `null` = `http://localhost:<port>`. A fixed URL without `{port}` also works for port-less items. |
 | `autoStart` | boolean | Start this item when the app launches (respecting its run mode). |
 
 ## Status model (for reference)
@@ -108,7 +110,7 @@ For a **detached daemon controlled by its own CLI** — a launchd service, or a 
 - **Status** is driven by the configured **`port`** (required), polled even when stopped — so starting or stopping the service *outside* Quay is reflected within one poll. Set `healthPath` to switch the probe from a TCP connect to an HTTP 2xx check (note: an admin root that returns 401/redirects will then read as stopped — leave it unset to use a plain port check).
 - Quay never owns the process, so (like `brew`/`terminal` items) it is **left running when Quay quits**.
 
-The ↗ **Open in browser** action (opens `http://localhost:<port>`) appears once the service is running, same as any ported item.
+The ↗ **Open in browser** action (opens `browserUrl`, default `http://localhost:<port>`) appears once the service is running, same as any ported item.
 
 ```jsonc
 {

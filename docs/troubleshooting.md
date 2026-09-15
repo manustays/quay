@@ -62,7 +62,7 @@ The process exited unexpectedly, or a start/stop failed. **Hover the red dot** f
 
 ## "Open in browser" does nothing
 
-The browser button only appears when the item has a **port**, and it opens `http://localhost:<port>`. If the page doesn't load, the service isn't actually serving on that port yet (check status / logs).
+The browser button only appears when the item is running and has a **port** (or a **Browser URL**). It opens the Browser URL, default `http://localhost:<port>`. If the page doesn't load, the service isn't actually serving on that port yet (check status / logs) — or it listens on IPv4 only while `localhost` resolves to IPv6 first: set the Browser URL to `http://127.0.0.1:{port}`.
 
 ## "Open terminal" opens the wrong app
 

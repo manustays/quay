@@ -52,7 +52,29 @@ pub struct ManagedItem {
 	pub favorite: bool,
 	#[serde(default)] pub env: BTreeMap<String, String>,
 	#[serde(rename = "healthPath")] pub health_path: Option<String>,
+	/// "Open in browser" URL template; `{port}` is substituted. `None` means
+	/// `http://localhost:<port>`. See [`resolve_browser_url`].
+	#[serde(rename = "browserUrl", default)] pub browser_url: Option<String>,
 	#[serde(rename = "autoStart")] pub auto_start: bool,
+}
+
+/// Resolve an item's "Open in browser" URL: its trimmed `browserUrl` (or
+/// `http://localhost:{port}`) with `{port}` substituted. The result is handed to
+/// `open`, so only `http://` / `https://` URLs with something after the scheme pass.
+pub fn resolve_browser_url(item: &ManagedItem) -> Result<String, AppError> {
+	let template = item.browser_url.as_deref().map(str::trim).filter(|u| !u.is_empty())
+		.unwrap_or("http://localhost:{port}");
+	let url = if template.contains("{port}") {
+		let port = item.port.ok_or_else(|| AppError::Message("browser URL needs a port".into()))?;
+		template.replace("{port}", &port.to_string())
+	} else {
+		template.to_string()
+	};
+	let lower = url.to_ascii_lowercase();
+	match lower.strip_prefix("http://").or_else(|| lower.strip_prefix("https://")) {
+		Some(rest) if !rest.is_empty() && !rest.starts_with('/') => Ok(url),
+		_ => Err(AppError::Message(format!("browser URL must be http:// or https://, got \"{url}\""))),
+	}
 }
 
 /// One agent+cwd pair hidden from the Agents (agent radar) section.
@@ -203,6 +225,38 @@ mod tests {
 		assert_eq!(item.docker_image, None);
 		assert_eq!(item.container_name, None);
 		assert!(item.env.is_empty());
+	}
+
+	#[test]
+	fn browser_url_resolves_template_and_rejects_bad_urls() {
+		// Pre-browserUrl config: loads, and falls back to localhost.
+		let json = r#"{"id":"x","name":"n","kind":"project","dir":"/tmp","startCmd":"npm run dev",
+			"stopCmd":null,"port":8002,"runMode":"background","brewFormula":null,"order":0,
+			"favorite":false,"healthPath":null,"autoStart":false}"#;
+		let mut item: ManagedItem = serde_json::from_str(json).unwrap();
+		assert_eq!(item.browser_url, None);
+		assert_eq!(resolve_browser_url(&item).unwrap(), "http://localhost:8002");
+
+		item.browser_url = Some(" http://127.0.0.1:{port}/index.html ".into());
+		assert_eq!(resolve_browser_url(&item).unwrap(), "http://127.0.0.1:8002/index.html");
+		item.browser_url = Some("HTTPS://192.168.1.42:9443".into());
+		assert_eq!(resolve_browser_url(&item).unwrap(), "HTTPS://192.168.1.42:9443");
+		item.browser_url = Some("   ".into());
+		assert_eq!(resolve_browser_url(&item).unwrap(), "http://localhost:8002");
+
+		for bad in ["file:///etc/passwd", "http://", "https:///path", "localhost:8002", "vscode://x"] {
+			item.browser_url = Some(bad.into());
+			assert!(resolve_browser_url(&item).is_err(), "{bad} should be rejected");
+		}
+
+		// No port: a fixed URL still works, a `{port}` template (or the default) doesn't.
+		item.port = None;
+		item.browser_url = Some("http://my.app.localhost".into());
+		assert_eq!(resolve_browser_url(&item).unwrap(), "http://my.app.localhost");
+		item.browser_url = Some("http://localhost:{port}".into());
+		assert!(resolve_browser_url(&item).is_err());
+		item.browser_url = None;
+		assert!(resolve_browser_url(&item).is_err());
 	}
 
 	#[test]

@@ -1,5 +1,5 @@
 use crate::detect::{self, DetectResult};
-use crate::model::{AppError, ManagedItem, Settings};
+use crate::model::{resolve_browser_url, AppError, ManagedItem, Settings};
 use crate::state::AppState;
 use crate::store;
 use tauri::State;
@@ -86,6 +86,16 @@ fn normalize_group(item: &mut ManagedItem) {
 		.filter(|g| !g.is_empty());
 }
 
+/// Trim `browserUrl` (empty → `None`) and reject a URL `open_browser` would refuse,
+/// so a bad value fails on save instead of on click.
+fn normalize_browser_url(item: &mut ManagedItem) -> Result<(), AppError> {
+	item.browser_url = item.browser_url.take().map(|u| u.trim().to_string()).filter(|u| !u.is_empty());
+	if item.browser_url.is_some() {
+		resolve_browser_url(item)?;
+	}
+	Ok(())
+}
+
 /// Add a new item; assigns a uuid if `item.id` is empty, then persists.
 #[tauri::command]
 pub fn add_item(state: State<AppState>, mut item: ManagedItem) -> Result<ManagedItem, AppError> {
@@ -93,6 +103,7 @@ pub fn add_item(state: State<AppState>, mut item: ManagedItem) -> Result<Managed
 		item.id = uuid::Uuid::new_v4().to_string();
 	}
 	normalize_group(&mut item);
+	normalize_browser_url(&mut item)?;
 	{
 		let mut cfg = state.config.lock().unwrap();
 		item.order = cfg.items.len() as u32;
@@ -106,6 +117,7 @@ pub fn add_item(state: State<AppState>, mut item: ManagedItem) -> Result<Managed
 #[tauri::command]
 pub fn update_item(state: State<AppState>, mut item: ManagedItem) -> Result<(), AppError> {
 	normalize_group(&mut item);
+	normalize_browser_url(&mut item)?;
 	{
 		let mut cfg = state.config.lock().unwrap();
 		if let Some(slot) = cfg.items.iter_mut().find(|i| i.id == item.id) {
@@ -474,13 +486,13 @@ pub fn stop_all(app: AppHandle) -> Result<(), AppError> {
 	Ok(())
 }
 
-/// Open `http://localhost:<port>` in the system browser.
+/// Open the item's browser URL (`browserUrl`, default `http://localhost:<port>`)
+/// in the system browser.
 #[tauri::command]
 pub fn open_browser(app: AppHandle, id: String) -> Result<(), AppError> {
 	let state = app.state::<AppState>();
 	let item = find_item(&state, &id).ok_or_else(|| AppError::Message("no such item".into()))?;
-	let port = item.port.ok_or_else(|| AppError::Message("no port".into()))?;
-	std::process::Command::new("open").arg(format!("http://localhost:{port}")).spawn()
+	std::process::Command::new("open").arg(resolve_browser_url(&item)?).spawn()
 		.map_err(|e| AppError::Message(e.to_string()))?;
 	Ok(())
 }

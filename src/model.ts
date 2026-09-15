@@ -33,7 +33,19 @@ export interface ManagedItem {
 	favorite: boolean;
 	env: Record<string, string>;
 	healthPath: string | null;
+	/** "Open in browser" URL template (`{port}` substituted); null = `http://localhost:<port>`. */
+	browserUrl: string | null;
 	autoStart: boolean;
+}
+
+/**
+ * The URL the ↗ action opens and the port chip copies: `browserUrl` (trimmed)
+ * with `{port}` substituted, else `http://localhost:<port>`. Mirrors Rust
+ * `resolve_browser_url`, which also validates the scheme on save and open.
+ */
+export function browserUrlFor(item: ManagedItem): string {
+	// ponytail: split/join, not replaceAll — tsconfig lib predates ES2021.
+	return (item.browserUrl?.trim() || 'http://localhost:{port}').split('{port}').join(String(item.port));
 }
 
 /**
@@ -217,6 +229,7 @@ export function blankItem(): ManagedItem {
 		favorite: false,
 		env: {},
 		healthPath: null,
+		browserUrl: null,
 		autoStart: false,
 	};
 }

@@ -38,10 +38,10 @@ If a **stopped** item's port is occupied by some other process, an amber ⚠ app
 | Button | Action | Shown when |
 |--------|--------|------------|
 | ▶ / ■ | Start / Stop | always |
-| ↗ | Open `http://localhost:<port>` in your browser | the item has a port |
+| ↗ | Open the service's **Browser URL** (default `http://localhost:<port>`) in your browser | running, and the item has a port or a Browser URL |
 | >_ | Open a terminal `cd`'d into the item's folder | the item has a folder |
 
-Clicking the **`:port` label** copies `http://localhost:<port>` to the clipboard.
+Clicking the **`:port` label** copies that same URL to the clipboard.
 
 Click the **body** of a row to expand it — you'll see the tail of its log file, plus **Edit**, **Favorite**, **Reveal** (show the folder in Finder), and **Delete**.
 
@@ -99,6 +99,7 @@ Standalone command-line tools and binaries — interactive long-running tools ru
 4. Adjust any field:
    - **Env** — one `KEY=VALUE` per line, merged into the process environment. _Use for dev variables only — don't store real secrets here; the config file is plain text._
    - **Health path** — optional. If set (e.g. `/health`), status uses an HTTP `GET` to `http://localhost:<port><healthPath>` and treats a 2xx as healthy. If empty, status uses a plain TCP port check.
+   - **Browser URL** — optional. What ↗ opens and the `:port` label copies; `{port}` is replaced with the port (e.g. `http://127.0.0.1:{port}` or `http://192.168.1.42:{port}/index.html`). Must be `http://` or `https://`. Empty = `http://localhost:<port>`.
    - **Favorite** — pin to the top section.
    - **Auto-start** — start this item automatically when the app launches.
 5. **Save.**

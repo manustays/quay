@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
 import { RowIcon } from './StackIcon';
 import { IconAction, MetricsText } from './RowBits';
-import type { DiscoveredPort, ItemMetrics, ManagedItem, Status } from '../model';
+import { browserUrlFor, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status } from '../model';
 import {
 	markStopped,
 	openBrowser,
@@ -110,7 +110,7 @@ export function ServiceRow({
 
 	/** Copy the service URL and flash the "copied!" label. */
 	const copyUrl = () => {
-		void navigator.clipboard.writeText(`http://localhost:${item.port}`);
+		void navigator.clipboard.writeText(browserUrlFor(item));
 		setCopied(true);
 		setTimeout(() => setCopied(false), 1000);
 	};
@@ -217,7 +217,7 @@ export function ServiceRow({
 								<span
 									role="button"
 									tabIndex={0}
-									title={`Copy http://localhost:${item.port}`}
+									title={`Copy ${browserUrlFor(item)}`}
 									onClick={(e) => {
 										e.stopPropagation();
 										copyUrl();
@@ -265,7 +265,7 @@ export function ServiceRow({
 							<X />
 						</IconAction>
 					)}
-					{item.port != null && status === 'running' && (
+					{(item.port != null || item.browserUrl) && status === 'running' && (
 						<IconAction label="Open in browser" onClick={act(() => openBrowser(item.id))}>
 							<ArrowUpRight />
 						</IconAction>
