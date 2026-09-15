@@ -43,6 +43,16 @@ For a build that opens with no warning, sign and notarize it — see [Packaging]
 - The app lives in the **menubar** (top-right), not the Dock. Look for its tray icon.
 - **Left-click** the icon for the popover; **right-click** for the **Quit** menu.
 
+## The popover opens on the wrong display, or not at all
+
+With multiple displays, the popover should open under the menubar icon you clicked (see [Multiple displays](usage.md#multiple-displays)). Quay 0.17.0 and earlier could place it on the other display, far from the icon, or completely off-screen on mixed Retina / non-Retina setups — especially displays stacked vertically — until the app was restarted. Update to the latest version.
+
+If it still misbehaves:
+
+- Click the icon on the display you want; a click on a different display moves an open popover there.
+- If a display was just connected, disconnected, or rearranged, close the popover and click the icon again.
+- As a last resort, right-click the icon → **Quit** and relaunch Quay.
+
 ## A service shows `starting` (yellow) and never turns green
 
 `starting` means the process is alive but the port isn't accepting connections yet. If it stays yellow:

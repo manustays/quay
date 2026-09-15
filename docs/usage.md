@@ -16,6 +16,13 @@ Left-click the menubar icon to open the popover. It has:
 
 Right-click the menubar icon for the **Quit** menu. Quitting stops every background service the app started.
 
+### Multiple displays
+
+With more than one display, macOS shows the menubar — and Quay's icon — on each one (when **Displays have separate Spaces** is on, the default). The popover always opens **under the icon you clicked**, on that display — including mixed Retina / non-Retina setups and displays stacked above or below each other.
+
+- Click the icon on the display where the popover is open → it **closes**.
+- Click the icon on a **different** display while it's open → the popover **moves** there (it stays open).
+
 ### Status indicators
 
 Each row shows a colored dot:

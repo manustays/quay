@@ -84,6 +84,20 @@ A second background thread (`metrics::spawn_metrics_loop`) samples per-process C
 
 Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta, then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
 
+### Popover placement
+
+On macOS the popover is positioned entirely in **AppKit coordinates** (`lib.rs`: `pin_under_tray`, `mac_screen_geometry`). Tauri's physical monitor origins/sizes (and the positioner plugin's `TrayCenter`, which builds on them) are inconsistent on mixed-DPI desktops — vertically stacked 1x + 2x displays in particular — and mixing them with AppKit window coordinates picked the wrong display or stranded the window off-screen (issue #5; upstream tauri-apps/tauri#7890, plugins-workspace#724).
+
+1. **Anchor.** On a left-click, the tray handler records `NSEvent::mouseLocation()` in `TrayAnchorState`. The cursor is over the status item at that moment, so this is the icon's position in the same space as `NSScreen`/`NSWindow`.
+2. **Screen.** `mac_screen_geometry` finds the `NSScreen` whose `frame` contains the anchor via the pure `cocoa_frame_contains` (unit-tested). AppKit is y-up and the cursor's top pixel row reports `y == maxY`, so y is matched on `(origin.y, maxY]` and x on `[origin.x, maxX)`. A half-open y range would miss clicks with the cursor pushed against the top edge — the usual way to hit the menubar — and on stacked displays would match the screen above.
+3. **Place.** The window's top-left is set with `setFrameTopLeftPoint`: x centered on the anchor and clamped inside the screen's `visibleFrame`, top edge at the top of `visibleFrame` (just under the menubar). The chosen screen's origin is stored in `PopoverMonitorState`.
+4. **Toggle vs move.** `toggle_popover` on a visible popover compares the clicked screen with `PopoverMonitorState`: same screen → hide; different screen → re-pin there and refocus instead of closing.
+5. **Resize.** `resize_popover` (driven by the frontend's content height) re-pins from the last anchor, keeping the top edge fixed so the window grows downward.
+
+If there is no anchor yet, or no screen contains it, or the call isn't on the main thread (`MainThreadMarker`), placement is skipped rather than guessed. Non-macOS builds keep the positioner's `TrayCenter`, guarded by `current_monitor()` so an off-screen window can't panic it.
+
+Known limit: the frontend's height cap (`POPOVER_MAX` in `Popup.tsx`) is read once from `window.screen.availHeight`, so after moving to a shorter display a very tall popover can extend past that display's bottom edge.
+
 ### Shutdown
 
 Quitting via the tray's **Quit** menu item drains the running map and stops each owned child **before** exiting (a `RunEvent::ExitRequested` handler is also installed as a backstop). Background children are in their own session, so they don't get a stray SIGHUP — explicit cleanup is what guarantees "services die with the app". Terminal-mode and brew items are intentionally not owned and are left running.
