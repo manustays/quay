@@ -18,6 +18,8 @@ import {
 	SelectTrigger,
 	SelectValue,
 } from '@/components/ui/select';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { CircleHelp } from 'lucide-react';
 import { RowIcon } from '@/components/StackIcon';
 import type { AgentKind, HookStatus, Settings } from '../model';
 import {
@@ -35,6 +37,30 @@ const AGENT_LABELS: Record<AgentKind, string> = {
 	opencode: 'OpenCode',
 	pi: 'Pi',
 };
+
+/**
+ * A `?` beside a setting's label, explaining what the setting costs. Worth the
+ * pixel: the intervals differ in whether they burn CPU with the popover closed,
+ * which is invisible from the number alone.
+ */
+function InfoHint({ text }: { text: string }): React.JSX.Element {
+	return (
+		<Tooltip>
+			<TooltipTrigger asChild>
+				<button
+					type="button"
+					aria-label={text}
+					// Explain-only: focusable for keyboard/VoiceOver, but never submits
+					// or steals the dialog's default action.
+					className="text-muted-foreground/70 hover:text-foreground focus-visible:text-foreground"
+				>
+					<CircleHelp className="size-3.5" />
+				</button>
+			</TooltipTrigger>
+			<TooltipContent className="max-w-[220px]">{text}</TooltipContent>
+		</Tooltip>
+	);
+}
 
 interface SettingsDialogProps {
 	open: boolean;
@@ -116,7 +142,10 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 						</div>
 
 						<div className="grid gap-1.5">
-							<Label className="text-xs text-muted-foreground">Poll interval (sec)</Label>
+							<Label className="gap-1.5 text-xs text-muted-foreground">
+								Poll interval (sec)
+								<InfoHint text="How often each service's status is re-checked. Runs all the time, even with this window closed — the one interval that affects battery. Raise it to use less CPU." />
+							</Label>
 							<Input
 								type="number"
 								min={1}
@@ -126,12 +155,29 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 						</div>
 
 						<div className="grid gap-1.5">
-							<Label className="text-xs text-muted-foreground">Metrics interval (sec)</Label>
+							<Label className="gap-1.5 text-xs text-muted-foreground">
+								Metrics interval (sec)
+								<InfoHint text="How often CPU and memory are sampled per service. Only while this window is open — closed, it costs nothing." />
+							</Label>
 							<Input
 								type="number"
 								min={1}
 								value={settings.metricsIntervalSec}
 								onChange={(e) => set({ metricsIntervalSec: Number(e.target.value) || 10 })}
+							/>
+						</div>
+
+						<div className="grid gap-1.5">
+							<Label className="gap-1.5 text-xs text-muted-foreground">
+								Agent interval (sec)
+								<InfoHint text="How often AI coding agent sessions are re-scanned. Only while this window is open — the menubar waiting badge updates on the poll interval instead." />
+							</Label>
+							<Input
+								type="number"
+								min={1}
+								disabled={!settings.trackAgents}
+								value={settings.agentIntervalSec}
+								onChange={(e) => set({ agentIntervalSec: Number(e.target.value) || 5 })}
 							/>
 						</div>
 
@@ -152,17 +198,34 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 						</label>
 
 						<label className="flex items-center justify-between gap-2 text-[13px]">
-							<span>Show waiting count in menubar</span>
+							<span>Track AI coding agents</span>
 							<Switch
-								checked={settings.waitingTitleBadge}
+								checked={settings.trackAgents}
+								onCheckedChange={(v) => set({ trackAgents: v })}
+							/>
+						</label>
+
+						{/* Both of these only mean anything while the radar is running, so they
+						    follow the toggle above rather than sitting there inert. */}
+						<label
+							className="flex items-center justify-between gap-2 pl-4 text-[13px]"
+							data-disabled={!settings.trackAgents}
+						>
+							<span className={settings.trackAgents ? undefined : 'text-muted-foreground'}>
+								Show waiting count in menubar
+							</span>
+							<Switch
+								disabled={!settings.trackAgents}
+								checked={settings.waitingTitleBadge && settings.trackAgents}
 								onCheckedChange={(v) => set({ waitingTitleBadge: v })}
 							/>
 						</label>
 
 						{hooks.length > 0 && (
-							<div className="grid gap-1.5">
-								<Label className="text-xs text-muted-foreground">
+							<div className={`grid gap-1.5 ${settings.trackAgents ? '' : 'opacity-50'}`}>
+								<Label className="gap-1.5 text-xs text-muted-foreground">
 									Agent radar hooks (working / waiting / idle)
+									{!settings.trackAgents && ' — tracking off'}
 								</Label>
 								{hooks.map((h) => (
 									<div key={h.agent} className="flex flex-col gap-0.5">
@@ -178,7 +241,7 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 												<Button
 													variant="ghost"
 													size="sm"
-													disabled={hookBusy === h.agent}
+													disabled={hookBusy === h.agent || !settings.trackAgents}
 													onClick={toggleHook(h)}
 												>
 													{h.installed ? 'Remove' : 'Install'}

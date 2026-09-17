@@ -403,6 +403,22 @@ fn thread_name_for(index: &str, id: &str) -> Option<String> {
 	name
 }
 
+/// Re-read `~/.codex/session_index.jsonl` only when its `(len, mtime)` moved. The
+/// file is appended to as threads are created, so a stamp comparison is enough, and
+/// an unchanged index costs one `stat` instead of reading the whole file every pass.
+fn refresh_codex_index(home: &Path, cache: &mut Option<(u64, SystemTime, String)>) {
+	let path = home.join(".codex/session_index.jsonl");
+	let Ok(meta) = std::fs::metadata(&path) else {
+		*cache = None;
+		return;
+	};
+	let stamp = (meta.len(), meta.modified().unwrap_or(SystemTime::UNIX_EPOCH));
+	if cache.as_ref().is_some_and(|(len, mtime, _)| (*len, *mtime) == stamp) {
+		return;
+	}
+	*cache = std::fs::read_to_string(&path).ok().map(|text| (stamp.0, stamp.1, text));
+}
+
 /// All codex rollout files as (cwd, session id, mtime), walking every
 /// `~/.codex/sessions/YYYY/MM/DD/` dir. The `session_meta` first line is
 /// immutable, so it's cached by path across passes; only mtimes are re-read.
@@ -466,6 +482,7 @@ fn session_info(
 	cwd: &str,
 	codex: &[(String, String, SystemTime)],
 	codex_index: &str,
+	claude_names: &mut HashMap<PathBuf, String>,
 ) -> SessionInfo {
 	match def.activity {
 		Activity::ClaudeJsonl => {
@@ -473,9 +490,21 @@ fn session_info(
 			let Some((path, mtime)) = newest_jsonl(&dir) else {
 				return SessionInfo { mtime: None, name: None };
 			};
-			// Read a bounded head: the first user prompt sits within the first
-			// few entries; a session log itself can grow to many MBs.
-			let name = read_head(&path, 256 * 1024).as_deref().and_then(first_user_prompt);
+			// The name comes from a bounded head read (the first user prompt sits in
+			// the first few entries; the log itself can be many MBs) and never changes
+			// once written — so cache it by path. A *miss* is not cached: the log
+			// exists from the moment the session starts, before any prompt.
+			let name = match claude_names.get(&path) {
+				Some(cached) => Some(cached.clone()),
+				None => {
+					let found =
+						read_head(&path, 256 * 1024).as_deref().and_then(first_user_prompt);
+					if let Some(n) = &found {
+						claude_names.insert(path.clone(), n.clone());
+					}
+					found
+				}
+			};
 			SessionInfo { mtime: Some(mtime), name }
 		}
 		Activity::PiJsonl => {
@@ -523,11 +552,12 @@ fn resolve_agent(
 	codex: &[(String, String, SystemTime)],
 	codex_index: &str,
 	now: SystemTime,
+	claude_names: &mut HashMap<PathBuf, String>,
 ) -> (&'static str, Option<String>) {
 	if let Some(h) = hook {
 		return (resolve_state(Some(h), None, cpu_percent, now), h.name.clone());
 	}
-	let session = session_info(def, home, cwd, codex, codex_index);
+	let session = session_info(def, home, cwd, codex, codex_index, claude_names);
 	(resolve_state(None, session.mtime, cpu_percent, now), session.name)
 }
 
@@ -853,10 +883,25 @@ pub fn matches_identity(pid: u32, agent: &str, cwd: &str) -> bool {
 /// return the snapshot to emit. Rows are rebuilt from scratch every pass (a
 /// PID gone between `ps` and the sysinfo refresh is simply skipped) and
 /// sorted by pid so rows don't jump between passes.
-pub fn scan(
-	app: &AppHandle,
-	codex_meta: &mut HashMap<PathBuf, Option<(String, String)>>,
-) -> Vec<DiscoveredAgent> {
+/// Cross-pass caches owned by the radar loop (`scanner::spawn_scan_loop`).
+///
+/// Every entry is keyed on something that cannot change behind our back, or carries
+/// the stamp it was read at — a cache that can go stale would show a wrong session
+/// name for as long as the app runs.
+#[derive(Default)]
+pub struct ScanCaches {
+	/// Codex rollout `session_meta` first lines, by path. Immutable once written.
+	pub codex_meta: HashMap<PathBuf, Option<(String, String)>>,
+	/// Claude session names by log path. **Successes only** — a log can exist before
+	/// its first user prompt is written, and caching that miss would hide the name
+	/// for the life of the process.
+	pub claude_names: HashMap<PathBuf, String>,
+	/// `~/.codex/session_index.jsonl` with the `(len, mtime)` it was read at, so an
+	/// appended index is re-read and an unchanged one costs a single `stat`.
+	pub codex_index: Option<(u64, SystemTime, String)>,
+}
+
+pub fn scan(app: &AppHandle, caches: &mut ScanCaches) -> Vec<DiscoveredAgent> {
 	let ps = ps_snapshot();
 	let tty: HashMap<u32, &str> = ps
 		.iter()
@@ -876,10 +921,13 @@ pub fn scan(
 
 	let mut sys = System::new();
 	let sys_pids: Vec<Pid> = tty.keys().map(|&p| Pid::from_u32(p)).collect();
+	// Candidate selection below reads only argv and cwd. `environ` is the expensive
+	// part of a refresh and is consumed solely for `jump_supported`, so it is left to
+	// the second pass over the handful of PIDs that turned out to be agents — not
+	// every tty-attached process on the machine.
 	let refresh = ProcessRefreshKind::nothing()
 		.with_cmd(UpdateKind::Always)
 		.with_cwd(UpdateKind::Always)
-		.with_environ(UpdateKind::Always) // supacode jump coordinates
 		.with_cpu()
 		.with_memory();
 	sys.refresh_processes_specifics(ProcessesToUpdate::Some(&sys_pids), true, refresh);
@@ -905,10 +953,15 @@ pub fn scan(
 		return Vec::new();
 	}
 
-	// Second targeted refresh so cpu_usage() has a valid delta to measure.
+	// Second targeted refresh so cpu_usage() has a valid delta to measure — and the
+	// only place `environ` (supacode jump coordinates) is read.
 	std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
 	let cand_pids: Vec<Pid> = candidates.iter().map(|&(p, _, _)| Pid::from_u32(p)).collect();
-	sys.refresh_processes_specifics(ProcessesToUpdate::Some(&cand_pids), true, refresh);
+	sys.refresh_processes_specifics(
+		ProcessesToUpdate::Some(&cand_pids),
+		true,
+		refresh.with_environ(UpdateKind::Always),
+	);
 
 	let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
 	let now = SystemTime::now();
@@ -929,14 +982,24 @@ pub fn scan(
 		matches!(d.activity, Activity::CodexRollout)
 			&& !hooks.contains_key(&(d.kind.to_string(), cwd.clone()))
 	});
-	let (codex, codex_index) = if has_codex {
-		(
-			codex_rollouts(&home, codex_meta),
-			std::fs::read_to_string(home.join(".codex/session_index.jsonl")).unwrap_or_default(),
-		)
+	let codex = if has_codex {
+		refresh_codex_index(&home, &mut caches.codex_index);
+		codex_rollouts(&home, &mut caches.codex_meta)
 	} else {
-		(Vec::new(), String::new())
+		Vec::new()
 	};
+	// Disjoint field borrows: the name cache is written during resolution while the
+	// index is only read from.
+	let claude_names = &mut caches.claude_names;
+	let codex_index: &str = if has_codex {
+		caches.codex_index.as_ref().map(|(_, _, t)| t.as_str()).unwrap_or_default()
+	} else {
+		""
+	};
+	// Manifest name + stack, deduped per pass: rows commonly share a cwd. Not cached
+	// across passes — a manifest can be edited or created while Quay is open, and the
+	// per-pass dedup already removes the repeated reads.
+	let mut manifests: HashMap<String, (String, Option<String>)> = HashMap::new();
 
 	let mut out: Vec<DiscoveredAgent> = candidates
 		.into_iter()
@@ -947,12 +1010,26 @@ pub fn scan(
 			// (agent, cwd) has no hook state — so a hooked session never trips
 			// the macOS "access data from other apps" prompt.
 			let hook = hooks.get(&(def.kind.to_string(), cwd.clone()));
-			let (state, session_name) =
-				resolve_agent(def, hook, &home, &cwd, cpu_percent, &codex, &codex_index, now);
-			// Manifest name + stack, like the port radar. Re-read per pass —
-			// a handful of agents × a few small manifest reads every 5 s.
-			let name = detect::name_from_dir(Path::new(&cwd));
-			let stack = detect::stack_from_dir(Path::new(&cwd)).map(str::to_string);
+			let (state, session_name) = resolve_agent(
+				def,
+				hook,
+				&home,
+				&cwd,
+				cpu_percent,
+				&codex,
+				codex_index,
+				now,
+				claude_names,
+			);
+			let (name, stack) = manifests
+				.entry(cwd.clone())
+				.or_insert_with(|| {
+					(
+						detect::name_from_dir(Path::new(&cwd)),
+						detect::stack_from_dir(Path::new(&cwd)).map(str::to_string),
+					)
+				})
+				.clone();
 			Some(DiscoveredAgent {
 				pid,
 				agent: def.kind,
@@ -1198,15 +1275,48 @@ mod tests {
 		let claude = &AGENTS[0];
 		assert_eq!(claude.kind, "claude");
 
+		let mut names = HashMap::new();
 		// Hook present → hook name, file untouched (still "working" from the fresh hook).
 		let hook = HookState { state: "working".into(), ts: now, name: Some("HOOK NAME".into()) };
-		let (state, name) = resolve_agent(claude, Some(&hook), &d, cwd, 0.0, &[], "", now);
+		let (state, name) =
+			resolve_agent(claude, Some(&hook), &d, cwd, 0.0, &[], "", now, &mut names);
 		assert_eq!(state, "working");
 		assert_eq!(name.as_deref(), Some("HOOK NAME"));
+		assert!(names.is_empty(), "hooked session must not touch (or cache) the log");
 
 		// No hook → falls back to reading the session log.
-		let (_, name2) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now);
+		let (_, name2) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
 		assert_eq!(name2.as_deref(), Some("FILE PROMPT"));
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn claude_name_cache_serves_hits_and_retries_misses() {
+		let d = std::env::temp_dir().join(format!("msm-rc-{}", uuid::Uuid::new_v4()));
+		let cwd = "/x/proj";
+		let proj = d.join(".claude/projects").join(claude_slug(cwd));
+		std::fs::create_dir_all(&proj).unwrap();
+		let log = proj.join("s.jsonl");
+		// A session log exists before its first user prompt is written — the miss
+		// must NOT be cached, or the name would never appear.
+		std::fs::write(&log, "{\"type\":\"system\"}\n").unwrap();
+		let now = SystemTime::now();
+		let claude = &AGENTS[0];
+		let mut names = HashMap::new();
+
+		let (_, missing) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
+		assert_eq!(missing, None);
+		assert!(names.is_empty(), "a nameless log must not be cached as a miss");
+
+		std::fs::write(&log, "{\"type\":\"user\",\"message\":{\"content\":\"LATER\"}}\n").unwrap();
+		let (_, found) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
+		assert_eq!(found.as_deref(), Some("LATER"));
+		assert_eq!(names.get(&log).map(String::as_str), Some("LATER"));
+
+		// Cached: served without re-reading, proven by emptying the file on disk.
+		std::fs::write(&log, "").unwrap();
+		let (_, cached) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
+		assert_eq!(cached.as_deref(), Some("LATER"));
 		std::fs::remove_dir_all(&d).ok();
 	}
 

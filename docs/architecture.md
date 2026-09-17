@@ -67,7 +67,12 @@ Each module has a single responsibility:
 
 ### Status polling
 
-A single background thread runs every `pollIntervalSec`:
+A single background thread runs every `pollIntervalSec`. This is the app's only
+always-on loop — it keeps running with the popover closed, because it drives the tray
+icon and the waiting-agent badge — so its per-pass cost is the app's energy floor.
+`brew services list` and `docker ps -a` are therefore spawned **once per pass**, not
+once per item, and parsed into a map the item loop looks up (the same batching
+`metrics::collect` does for `launchctl`/`lsof`). Each pass:
 
 - For each non-stopped item, it computes status:
   - **background:** is the child PID alive? then a port/HTTP check → `decide_status`. A dead PID records an error and yields `error`.
@@ -80,9 +85,9 @@ The poll loop deliberately releases the `running` lock before doing the (blockin
 
 ### Metrics sampling
 
-A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it idle-ticks every 500 ms and does no sampling work.
+A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it blocks on a condvar (`AppState::wait_visible`) rather than idle-ticking, so a closed popover costs zero wakeups and an open is picked up immediately. The interval between samples is a condvar wait too, carrying the visibility *generation* the pass started with — a hide→show that happens during a collection would otherwise notify a condvar nobody was waiting on and be slept through.
 
-Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta, then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
+Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta (cpu+memory only — the tree walk needs every process's parent, but not its argv, environ, cwd or disk I/O), then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
 
 ### Popover placement
 
@@ -97,6 +102,58 @@ On macOS the popover is positioned entirely in **AppKit coordinates** (`lib.rs`:
 If there is no anchor yet, or no screen contains it, or the call isn't on the main thread (`MainThreadMarker`), placement is skipped rather than guessed. Non-macOS builds keep the positioner's `TrayCenter`, guarded by `current_monitor()` so an off-screen window can't panic it.
 
 Known limit: the frontend's height cap (`POPOVER_MAX` in `Popup.tsx`) is read once from `window.screen.availHeight`, so after moving to a shorter display a very tall popover can extend past that display's bottom edge.
+
+### Tray menu attachment (macOS 27 workaround)
+
+macOS 27 stopped forwarding status-item mouse events to the `NSView` that `tray-icon`
+installs on the `NSStatusBarButton` whenever an `NSMenu` is attached to the `NSStatusItem`:
+AppKit's menu tracking swallows the click instead. The view's `mouseDown:`/`mouseUp:` never
+fire, so no `TrayIconEvent::Click` is emitted, so `on_tray_icon_event` never runs — the
+popover becomes unreachable and *every* click, left or right, just opens the context menu.
+`show_menu_on_left_click(false)` cannot help: the suppression it relies on lives in the
+callback AppKit no longer invokes.
+
+So on macOS the builder deliberately does **not** call `.menu(&tray_menu)`. Instead
+`show_tray_menu` (`lib.rs`) attaches the menu, presents it, and detaches it again:
+
+```
+set_menu(Some(menu)) → with_inner_tray_icon(|t| t.show_menu()) → set_menu(None)
+```
+
+Two things make this safe, and both are worth knowing before touching it:
+
+- **It must stay synchronous.** Tray events arrive on the main thread, and Tauri's
+  main-thread dispatch (`run_item_main_thread!` → `send_user_message`) calls straight
+  through when it is already on that thread. `show_menu` is an `NSStatusBarButton
+  ::performClick`, which runs AppKit's nested menu-tracking loop and returns only once the
+  menu is dismissed — which is exactly when the detach should happen. Moving this onto a
+  worker thread would widen the window in which the menu sits attached and clicks are dead.
+- **It is bound to right-button *Down*, not Up**, matching how every other macOS menubar
+  item opens its menu and preserving press-drag-release selection.
+
+#### The click also races hide-on-blur
+
+Detaching the menu exposes a second macOS 27 change: the status-item button now takes key
+focus on mouse-down, so the popover resigns key and `WindowEvent::Focused(false)` hides it
+**before** the click is delivered. Measured on this machine, the blur handler runs ~80 ms
+ahead of `TrayIconEvent::Click`. A toggle that only asks `win.is_visible()` therefore sees
+a hidden window and reopens it — the click flickers instead of closing.
+
+So the blur handler records *when* it hid the popover (`note_blur_hide`), and the tray
+handler latches the verdict on the click's **press** (`press_closes_popover`) while that
+timestamp is still fresh, within `BLUR_CLICK_GRACE` (250 ms). The **release** consumes the
+latch and passes it to `toggle_popover` as `already_closed`, which then treats the popover
+as open despite the hidden window. Latching on the press rather than testing the clock at
+release is what makes a press held longer than the grace window behave the same as a quick
+one. The cross-display branch still wins over the close, so clicking the icon on another
+display moves the popover there instead of swallowing the click.
+
+This mirrors the upstream fix, [tauri-apps/tray-icon#365](https://github.com/tauri-apps/tray-icon/pull/365),
+which landed in tray-icon 0.25.1. Tauri 2.11 still requires `tray-icon ^0.24`, so the fix
+is unreachable from here — 0.25.1 is semver-incompatible, and `[patch.crates-io]` cannot
+bridge that. **Removal condition:** once Tauri depends on `tray-icon >= 0.25.1`, delete
+`show_tray_menu` and its event arm and restore the plain `.menu(&tray_menu)` on the
+builder. Non-macOS builds already take that path and are unaffected.
 
 ### Shutdown
 

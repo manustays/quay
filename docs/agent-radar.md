@@ -9,6 +9,27 @@ sessions in the same folder club into one **project folder row** with a stack
 of overlapping agent badges on the right — which agents are in there, dimmed
 when idle — that expands into the member rows.
 
+## Switching it off
+
+**Settings → Track AI coding agents** (`trackAgents`, on by default) is a master
+switch, not a display filter. With it off:
+
+- the scan loop skips the radar pass outright, so the `ps` + sysinfo work below
+  never runs — turning it off actually costs nothing per tick;
+- `refresh_waiting_badge` forces the count to zero, so the tray's waiting glyph
+  and the `waitingTitleBadge` title clear immediately rather than freezing at
+  their last value. The hook-driven poll loop keeps calling it, so this holds
+  even though hooks keep firing;
+- the popover drops its AGENTS section, and any rows already on screen are
+  cleared when the setting is saved;
+- **Show waiting count in menubar** is disabled, since it has nothing to count.
+
+Hooks already installed are left alone — installing them is a deliberate,
+separate action that writes to your Claude/Codex config, so a settings flip does
+not undo it. Their state files are simply ignored while tracking is off, and the
+hooks list in Settings greys out. Turn tracking back on and the radar resumes on
+the next scan pass with no reinstall.
+
 ## How detection works
 
 - **Interactive session = agent process + attached tty.** Each scan pass runs
@@ -24,8 +45,16 @@ when idle — that expands into the member rows.
 - **Project name & stack** come from the session's cwd, exactly like the port
   radar: manifest name (`package.json` / `Cargo.toml`) with the folder
   basename as fallback, plus the detected stack icon (Vite, Rails, …).
-- The scan shares the port radar's loop: every 5 s **while the popover is
-  open**, nothing while it's hidden.
+- The scan shares the port radar's loop but keeps its own cadence:
+  `agentIntervalSec` (default 5 s) **while the popover is open**, nothing while
+  it's hidden — the loop blocks on a condvar rather than idle-ticking, so a
+  closed popover costs no wakeups at all. The port radar stays on its own 5 s
+  tick; whichever is due first wakes the loop.
+- Per-pass reads are cached where the source can't change behind us: Claude
+  session names by log path (successes only — a log exists before its first
+  prompt is written), codex rollout metas by path, and
+  `~/.codex/session_index.jsonl` by `(len, mtime)`. Manifest name/stack lookups
+  are deduped per pass, not across passes, so editing a manifest still shows up.
 
 ## Session names (hover)
 
@@ -74,6 +103,14 @@ could badge the tray with no matching row. Two mechanisms now keep them in step:
   into `last_agent_pids`; `waiting_count` drops a waiting key whose every stamped PID
   is dead (`kill(pid, 0)`) — a *crashed-while-waiting* session clears without waiting
   for the 10-minute dead-session prune.
+- **Orphan sweep.** A `waiting` file whose session died *unscanned* has no stamped
+  PID to test, so it is swept by comparing the state dir against live sessions
+  (`prune_orphan_hook_states` + `live_agent_keys`). That enumeration forks `ps`, and
+  "an agent is waiting on you" is a steady state, not a rare one — so on the always-on
+  poll loop it is rate-limited to once a minute (`PRUNE_INTERVAL_SECS`), while the
+  popover-open path runs it unconditionally on every open and every agent pass. A
+  phantom badge therefore clears within ~a minute in the background, or instantly the
+  moment you open Quay.
 
 Remaining ceilings: PIDs are keyed by `(agent, cwd)`, so a dead waiting session
 sharing a folder with a live sibling still badges until the next popover-open scan;
@@ -124,8 +161,8 @@ helper, so there is one audited state-writer for every agent.
 How the radar consumes it: `quay-hook` writes one small JSON file per session
 (`{ agent, cwd, state, ts }`) under
 `~/Library/Application Support/am.abhi.quay/agent-state/`, keyed by session and
-tagged with the agent so two agents sharing a folder don't collide. The 5 s
-poll reads them. It trusts **waiting** outright and a **fresh working** (event
+tagged with the agent so two agents sharing a folder don't collide. The always-on poll
+reads them (`pollIntervalSec`, independent of `agentIntervalSec`). It trusts **waiting** outright and a **fresh working** (event
 within 5 min); a session-log write newer than a waiting event overrides it (the
 session resumed), a stale working falls back to the heuristic, dead-session
 files are pruned after a 10-minute grace, and corrupt/partial files are dropped

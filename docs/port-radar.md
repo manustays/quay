@@ -4,7 +4,7 @@ Quay discovers dev servers you started outside the app — a `vite` left running
 
 ## How it works
 
-The scan loop (`src-tauri/src/scanner.rs`) mirrors the metrics loop: it idles while the popover is hidden and runs one pass every **5 seconds** while it's open.
+The scan loop (`src-tauri/src/scanner.rs`) mirrors the metrics loop: it blocks on the visibility condvar while the popover is hidden (no idle tick) and runs one pass every **5 seconds** while it's open. The agent radar shares the loop on its own `agentIntervalSec` cadence, and the loop wakes for whichever deadline lands first.
 
 Each pass:
 

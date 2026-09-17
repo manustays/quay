@@ -194,3 +194,12 @@ textarea {
 @media (prefers-reduced-motion: reduce) {
   .row-in { animation: none; }
 }
+
+/* The popover is hidden, not unmounted, so the `animate-pulse` dots on waiting and
+   working agents would keep compositing off-screen forever. `data-hidden` is set
+   from the backend's popover_visibility event (App.tsx). */
+html[data-hidden] *,
+html[data-hidden] *::before,
+html[data-hidden] *::after {
+  animation-play-state: paused;
+}

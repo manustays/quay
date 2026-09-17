@@ -213,6 +213,14 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		pending_update: std::sync::Mutex::new(None),
 		waiting_count: std::sync::atomic::AtomicUsize::new(0),
 		last_agent_pids: std::sync::Mutex::new(std::collections::HashMap::new()),
+		wake: (std::sync::Mutex::new(crate::state::Wake::default()), std::sync::Condvar::new()),
+		// Backdated so the first orphan sweep isn't held off for a whole interval
+		// after launch (`checked_sub` guards a monotonic clock younger than it).
+		last_prune: std::sync::Mutex::new(
+			std::time::Instant::now()
+				.checked_sub(std::time::Duration::from_secs(crate::PRUNE_INTERVAL_SECS))
+				.unwrap_or_else(std::time::Instant::now),
+		),
 	}
 }
 

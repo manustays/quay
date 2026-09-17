@@ -93,6 +93,19 @@ export function onUpdateAvailable(cb: (u: UpdateInfo) => void): Promise<Unlisten
 export const getPendingUpdate = () => invoke<UpdateInfo | null>('get_pending_update');
 
 /**
+ * Subscribe to popover show/hide. The popover is hidden, not unmounted, so the
+ * frontend uses this to pause its infinite CSS animations while off-screen.
+ * Returns an unlisten function.
+ */
+export function onPopoverVisibility(cb: (visible: boolean) => void): Promise<UnlistenFn> {
+	return listen<boolean>('popover_visibility', (e) => cb(e.payload));
+}
+
+/** Current popover visibility — seeds the frontend on mount, since a reload while
+ * hidden misses the event that would otherwise have told it. */
+export const getPopoverVisible = () => invoke<boolean>('get_popover_visible');
+
+/**
  * Download + install the pending update, then restart the app. Resolves only if the
  * remote is no longer newer (banner should clear); on success the app restarts and
  * this never resolves. Rejects with an error string on failure or if a check is

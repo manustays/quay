@@ -12,7 +12,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::atomic::Ordering;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -224,34 +224,75 @@ fn scan(app: &AppHandle, cache: &mut HashMap<u32, Resolved>) -> Vec<DiscoveredPo
 	out
 }
 
-/// Spawn the visibility-gated radar loop: idle-tick 500 ms while the popover
-/// is hidden, scan + emit `ports_discovered` every 5 s while it's open.
+/// The port radar's own cadence. Unlike the agent radar (`agentIntervalSec`) this
+/// has no knob: one `lsof` plus a cached per-PID resolve is cheap, and the Detected
+/// section is the one people watch a server appear in.
+const PORT_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Spawn the visibility-gated radar loop: blocks on the visibility condvar while the
+/// popover is hidden (no idle tick), then runs the port radar every [`PORT_INTERVAL`]
+/// and the agent radar on its own `agentIntervalSec`, whichever comes due first.
 pub fn spawn_scan_loop(app: AppHandle) {
 	std::thread::spawn(move || {
 		let mut cache: HashMap<u32, Resolved> = HashMap::new();
-		// Codex rollout first-lines are immutable — cached across passes.
-		let mut codex_meta = HashMap::new();
+		// Session names, codex rollout metas and the codex index, cached across passes.
+		let mut caches = crate::agent_radar::ScanCaches::default();
+		// The visibility generation the current deadlines were set against. A change
+		// means the popover was reopened, so both radars are due immediately rather
+		// than at a deadline computed before the user last closed it.
+		let mut generation_seen = u64::MAX;
+		let mut next_port = Instant::now();
+		let mut next_agent = Instant::now();
 		loop {
-			let visible = app.state::<AppState>().visible.load(Ordering::Relaxed);
-			if !visible {
-				std::thread::sleep(Duration::from_millis(500));
-				continue;
+			let generation = app.state::<AppState>().wait_visible();
+			if generation != generation_seen {
+				generation_seen = generation;
+				next_port = Instant::now();
+				next_agent = Instant::now();
+				// Sweep orphaned waiting files on every open, whatever the agent
+				// interval says: `agent_radar::scan` returns before pruning when no
+				// agent process exists, so this is the only path that clears a
+				// phantom badge from a session that died unscanned.
+				crate::refresh_waiting_badge(&app, true);
 			}
-			let discovered = scan(&app, &mut cache);
-			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
-				let _ = app.emit("ports_discovered", &discovered);
+			if Instant::now() >= next_port {
+				let discovered = scan(&app, &mut cache);
+				if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+					let _ = app.emit("ports_discovered", &discovered);
+				}
+				next_port = Instant::now() + PORT_INTERVAL;
 			}
-			// Agent radar shares this loop: same visibility gate (the ps+sysinfo
-			// work itself is skipped while hidden, not just the emit), same cadence.
-			let agents = crate::agent_radar::scan(&app, &mut codex_meta);
-			// scan just stamped live PIDs and reconciled resumed waiting files;
-			// recompute the badge now so it matches the rows the moment they emit.
-			crate::refresh_waiting_badge(&app);
-			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
-				let _ = app.emit("agents_discovered", &agents);
+			// Agent radar shares this loop and its visibility gate (the ps+sysinfo
+			// work itself is skipped while hidden, not just the emit) but keeps its
+			// own cadence. The `trackAgents` setting gates the whole pass, so
+			// switching it off costs nothing per tick rather than hiding the result.
+			let (track_agents, agent_interval) = {
+				let state = app.state::<AppState>();
+				let cfg = state.config.lock().unwrap();
+				(
+					cfg.settings.track_agents,
+					Duration::from_secs(cfg.settings.agent_interval_sec.max(1)),
+				)
+			};
+			if !track_agents {
+				// Hold the deadline at "now" so re-enabling tracking scans on the
+				// next tick instead of waiting out an interval that never ran.
+				next_agent = Instant::now();
+			} else if Instant::now() >= next_agent {
+				let agents = crate::agent_radar::scan(&app, &mut caches);
+				// scan just stamped live PIDs and reconciled resumed waiting files;
+				// recompute the badge now so it matches the rows the moment they emit.
+				crate::refresh_waiting_badge(&app, true);
+				if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+					let _ = app.emit("agents_discovered", &agents);
+				}
+				next_agent = Instant::now() + agent_interval;
 			}
-			// ponytail: hardcoded 5 s cadence; a settings knob only if asked for
-			std::thread::sleep(Duration::from_secs(5));
+			let deadline = if track_agents { next_port.min(next_agent) } else { next_port };
+			// Not a plain sleep: a hide (or hide→show) during the scans above would
+			// otherwise be sat out for the rest of the interval.
+			app.state::<AppState>()
+				.wait_interval(generation, deadline.saturating_duration_since(Instant::now()));
 		}
 	});
 }
