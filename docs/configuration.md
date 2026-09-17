@@ -34,6 +34,7 @@ The file is written atomically (temp file + rename) on every change. If it ever 
 | `terminalApp` | `"Terminal"` \| `"iTerm"` | `"Terminal"` | Which terminal emulator the "open terminal" action and `terminal`-mode items use. |
 | `pollIntervalSec` | number | `3` | How often (seconds) the background loop re-checks each item's status. Minimum 1. |
 | `metricsIntervalSec` | number | `10` | How often (seconds) per-process CPU%/memory are sampled **while the popover is open**. No sampling happens while it's closed. Minimum 1. See [metrics](metrics.md). |
+| `agentIntervalSec` | number | `5` | How often (seconds) the agent radar re-scans AI-agent sessions, **while the popover is open**. The always-on tray waiting badge rides `pollIntervalSec` instead, so raising this never delays the menubar. Approximate — a pass takes ~200 ms and the interval is measured from the end of the previous one. Minimum 1. See [agent radar](agent-radar.md). |
 | `browser` | string | `"default"` | Reserved; the browser action currently always uses the system default browser. |
 | `launchAtLogin` | boolean | `false` | Whether the app is registered as a macOS login item. Toggle via Settings (it also calls the OS API). |
 | `ignoredPorts` | number[] | `[]` | Ports hidden from the popover's DETECTED (port radar) section. Add via a detected row's **Ignore** action; remove via the chips in Settings. |
@@ -142,6 +143,7 @@ The ↗ **Open in browser** action (opens `browserUrl`, default `http://localhos
     "terminalApp": "iTerm",
     "pollIntervalSec": 2,
     "metricsIntervalSec": 10,
+    "agentIntervalSec": 5,
     "browser": "default",
     "launchAtLogin": true
   },

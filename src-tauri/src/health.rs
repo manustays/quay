@@ -1,4 +1,5 @@
 use crate::model::Status;
+use std::collections::HashMap;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
@@ -162,8 +163,9 @@ pub fn spawn_poll_loop(app: AppHandle) {
 		};
 		poll_once(&app);
 		// Always-on: refresh the waiting-agent menubar signal even while the popover
-		// (and its heavier radar scan) is closed.
-		crate::refresh_waiting_badge(&app);
+		// (and its heavier radar scan) is closed. `false`: the `ps`-forking orphan
+		// sweep is rate-limited here, not run every tick.
+		crate::refresh_waiting_badge(&app, false);
 		std::thread::sleep(std::time::Duration::from_secs(interval));
 	});
 }
@@ -174,6 +176,31 @@ pub fn spawn_poll_loop(app: AppHandle) {
 pub fn poll_once(app: &AppHandle) {
 	let state = app.state::<AppState>();
 	let items = state.config.lock().unwrap().items.clone();
+	// One `brew services list` / `docker ps -a` for the whole pass instead of one
+	// fork per item — the batching `metrics::collect` already does for `launchctl`
+	// and `lsof`. Built only when an item of that kind exists, so a config without
+	// one forks nothing. A failed spawn yields an empty map, which lands on the same
+	// `Stopped` fallback `brew_status`/`docker_status` use.
+	let brew_map: HashMap<String, Status> = if items
+		.iter()
+		.any(|i| matches!(i.kind, ItemKind::Brew) && i.brew_formula.is_some())
+	{
+		crate::brew::services_list_raw()
+			.map(|t| crate::brew::parse_brew_list(&t))
+			.unwrap_or_default()
+	} else {
+		HashMap::new()
+	};
+	let docker_map: HashMap<String, Status> = if items
+		.iter()
+		.any(|i| matches!(i.kind, ItemKind::Docker) && i.container_name.is_some())
+	{
+		crate::docker::ps_raw()
+			.map(|t| crate::docker::parse_docker_ps(&t))
+			.unwrap_or_default()
+	} else {
+		HashMap::new()
+	};
 	for item in items {
 		let current = state.statuses.lock().unwrap().get(&item.id).copied();
 		// Brew + Docker + Command are polled even when Stopped: their state lives
@@ -187,12 +214,12 @@ pub fn poll_once(app: &AppHandle) {
 		let status = match item.kind {
 			ItemKind::Brew => {
 				item.brew_formula.as_deref()
-					.map(crate::brew::brew_status)
+					.and_then(|f| brew_map.get(f).copied())
 					.unwrap_or(Status::Stopped)
 			}
 			ItemKind::Docker => {
 				item.container_name.as_deref()
-					.map(crate::docker::docker_status)
+					.and_then(|n| docker_map.get(n).copied())
 					.unwrap_or(Status::Stopped)
 			}
 			ItemKind::Command => {

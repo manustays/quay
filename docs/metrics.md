@@ -20,9 +20,15 @@ So the metrics loop is gated on `AppState.visible`:
   must continue.
 - The flag mirrors the *actual* outcome of each window op, never just the intended branch.
 
-While hidden the loop idle-ticks every 500 ms and does zero sampling work; that bounds the
-latency to the first sample after opening to ≤0.5s. It also re-checks `visible` after a
-collection (which takes ~200 ms + `lsof`) and skips the emit if the popover closed meanwhile.
+While hidden the loop **blocks on the visibility condvar** — no idle tick, no wakeups — and
+is released the moment the popover opens. It also re-checks `visible` after a collection
+(which takes ~200 ms + `lsof`) and skips the emit if the popover closed meanwhile. The
+interval between samples is a condvar wait, not a sleep, so a hide (or a hide→show) that
+happens *during* a collection is acted on at once instead of being slept through.
+
+The two process-table refreshes ask for cpu+memory only. `ProcessesToUpdate::All` is still
+required — the descendant walk needs every process's parent — but the default refresh kind
+would also read cmd, environ, cwd, disk and user for every process on the machine, twice.
 
 ## How a sample is taken
 

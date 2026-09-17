@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { detectFolder, getItems, getPendingUpdate, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPortsDiscovered, onStatusChanged, onUpdateAvailable } from './ipc';
+import { detectFolder, getItems, getPendingUpdate, getPopoverVisible, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPopoverVisibility, onPortsDiscovered, onStatusChanged, onUpdateAvailable } from './ipc';
 import { blankItem, type DiscoveredAgent, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status, type UpdateInfo } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
@@ -147,6 +147,24 @@ export function App(): React.JSX.Element {
 		// Port-radar and agent-radar snapshots likewise replace wholesale per pass.
 		void onPortsDiscovered(setDiscovered).then(track);
 		void onAgentsDiscovered(setAgents).then(track);
+
+		// The popover is hidden, not unmounted, so its infinite `animate-pulse` dots
+		// would keep compositing off-screen. Pause every animation while hidden.
+		let visibilitySeeded = false;
+		const applyVisibility = (visible: boolean) => {
+			if (visible) delete document.documentElement.dataset.hidden;
+			// An empty string still matches `[data-hidden]`; 'false' would too.
+			else document.documentElement.dataset.hidden = '';
+		};
+		void onPopoverVisibility((visible) => {
+			visibilitySeeded = true;
+			applyVisibility(visible);
+		}).then(track);
+		void getPopoverVisible().then((visible) => {
+			// A live event that landed while this was in flight is newer — an
+			// out-of-order response must not resurrect the stale value.
+			if (!cancelled && !visibilitySeeded) applyVisibility(visible);
+		});
 
 		// Update banner: subscribe to live events, and backfill any update whose
 		// event fired before this listener mounted (the app starts hidden).

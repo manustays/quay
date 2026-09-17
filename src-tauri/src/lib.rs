@@ -95,6 +95,27 @@ fn mac_screen_geometry(anchor: TrayAnchor) -> Option<MacScreenGeometry> {
 /// overlapping this one.
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 86_400;
 
+/// How often the always-on badge path sweeps orphaned `waiting` hook-state files.
+/// The sweep forks `ps`, so it is deliberately rare: it only fixes a phantom count
+/// (a session that died without a clearing hook), which no user is waiting on. The
+/// popover-open path prunes unconditionally, so opening Quay still heals instantly.
+pub const PRUNE_INTERVAL_SECS: u64 = 60;
+
+/// Set popover visibility everywhere it matters: the shared flag the gated loops
+/// block on, and the frontend event that pauses the always-running CSS animations
+/// while the window is hidden. The single writer — see [`state::AppState::set_visible`].
+fn set_popover_visible(app: &tauri::AppHandle, vis: bool) {
+	app.state::<state::AppState>().set_visible(vis);
+	let _ = app.emit("popover_visibility", vis);
+}
+
+/// Current popover visibility, for the frontend to seed its own state on mount —
+/// a reload while hidden would otherwise miss the event and keep animating.
+#[tauri::command]
+fn get_popover_visible(state: tauri::State<state::AppState>) -> bool {
+	state.visible.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Reflect service health *and* waiting agents on the tray. Icon precedence:
 /// any service `Error` (red) > any waiting agent (amber submerged-buoy glow) >
 /// any service `Starting` (amber) > nominal (monochrome template, theme-adaptive).
@@ -143,7 +164,14 @@ pub fn update_tray_icon(app: &tauri::AppHandle) {
 /// reflects waiting agents even while the popover — and thus the heavy radar scan —
 /// is closed. Cheap: a directory read of small JSON files plus a `kill(pid, 0)`
 /// liveness check per waiting file (from the PIDs `scan` stamped), no `ps`/`sysinfo`.
-pub fn refresh_waiting_badge(app: &tauri::AppHandle) {
+///
+/// `force_prune` controls the one *expensive* part, the orphan sweep (which forks
+/// `ps`). The popover-open caller passes `true` — the user is looking, and `scan`
+/// bails before stamping when no agent process exists, so that path is the only one
+/// that clears a never-scanned phantom. The always-on caller passes `false` and is
+/// rate-limited to [`PRUNE_INTERVAL_SECS`], because a 3 s `ps` fork forever is what
+/// this costs otherwise.
+pub fn refresh_waiting_badge(app: &tauri::AppHandle, force_prune: bool) {
 	use std::sync::atomic::Ordering;
 	let st = app.state::<state::AppState>();
 	let (track_agents, ignored) = {
@@ -167,9 +195,10 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle) {
 	// A phantom count — a `waiting` file whose session died without a clearing
 	// hook — otherwise self-heals only on a popover scan. When the badge would
 	// show, sweep orphaned waiting files (crashed/exited: no live process, event
-	// older than the grace) so it clears without one. The process enumeration
-	// runs only in this `count > 0` branch, so it's free while nothing waits.
-	let count = if count > 0 {
+	// older than the grace) so it clears without one. The process enumeration runs
+	// only in this `count > 0` branch *and* only when the rate limit allows, since
+	// "an agent is waiting on you" is a steady state, not a rare one.
+	let count = if count > 0 && (force_prune || claim_prune_slot(&st)) {
 		agent_radar::prune_orphan_hook_states(
 			&dir,
 			&agent_radar::live_agent_keys(&ignored),
@@ -183,6 +212,19 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle) {
 	if st.waiting_count.swap(count, Ordering::Relaxed) != count {
 		update_tray_icon(app);
 	}
+}
+
+/// Reserve the next orphan-sweep slot: true at most once per [`PRUNE_INTERVAL_SECS`].
+/// The new instant is written *before* the caller does the work and while the lock is
+/// held, so two loops can't both decide it's their turn. `Instant` (not wall clock) so
+/// a clock rollback can't stall the sweep forever or make it fire every tick.
+fn claim_prune_slot(st: &state::AppState) -> bool {
+	let mut last = st.last_prune.lock().unwrap();
+	if last.elapsed() < std::time::Duration::from_secs(PRUNE_INTERVAL_SECS) {
+		return false;
+	}
+	*last = std::time::Instant::now();
+	true
 }
 
 /// Check GitHub for a newer release; if the user agrees, download, install, and
@@ -484,11 +526,10 @@ fn take_press_closed_popover() -> bool {
 }
 
 fn show_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
-	use std::sync::atomic::Ordering;
 	// Mirror `visible` to the actual outcome of the window op.
 	match win.show() {
 		Ok(()) => {
-			app.state::<state::AppState>().visible.store(true, Ordering::Relaxed);
+			set_popover_visible(app, true);
 			if let Err(e) = win.set_focus() {
 				log_warn("popover focus failed", e);
 			}
@@ -498,9 +539,8 @@ fn show_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 }
 
 fn hide_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
-	use std::sync::atomic::Ordering;
 	match win.hide() {
-		Ok(()) => app.state::<state::AppState>().visible.store(false, Ordering::Relaxed),
+		Ok(()) => set_popover_visible(app, false),
 		Err(e) => log_warn("popover hide failed", e),
 	}
 }
@@ -623,6 +663,7 @@ pub fn run() {
 			commands::uninstall_agent_hooks,
 			resize_popover,
 			get_pending_update,
+			get_popover_visible,
 			install_update,
 		])
 		.setup(|app| {
@@ -881,11 +922,7 @@ pub fn run() {
 						// during a native dialog (suppress_hide) it stays open, so the
 						// metrics loop must keep sampling.
 						if window.hide().is_ok() {
-							window
-								.app_handle()
-								.state::<state::AppState>()
-								.visible
-								.store(false, std::sync::atomic::Ordering::Relaxed);
+							set_popover_visible(window.app_handle(), false);
 							// A tray click arriving right after this is the click that
 							// caused it, and must not reopen what it just closed.
 							#[cfg(target_os = "macos")]

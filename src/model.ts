@@ -56,6 +56,8 @@ export interface Settings {
 	terminalApp: string;
 	pollIntervalSec: number;
 	metricsIntervalSec: number;
+	/** Agent-radar cadence. Popover-open only, like `metricsIntervalSec`. */
+	agentIntervalSec: number;
 	browser: string;
 	launchAtLogin: boolean;
 	/** Ports hidden from the Detected (port radar) section. */

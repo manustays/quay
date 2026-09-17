@@ -92,6 +92,12 @@ pub struct Settings {
 	#[serde(rename = "pollIntervalSec")] pub poll_interval_sec: u64,
 	#[serde(rename = "metricsIntervalSec", default = "default_metrics_interval_sec")]
 	pub metrics_interval_sec: u64,
+	/// How often the agent radar re-scans AI-agent sessions, in seconds. Popover-open
+	/// only, like the metrics loop — the always-on tray badge rides the poll loop
+	/// instead. Approximate: a pass takes ~200 ms, and the interval is measured from
+	/// the end of the previous one.
+	#[serde(rename = "agentIntervalSec", default = "default_agent_interval_sec")]
+	pub agent_interval_sec: u64,
 	pub browser: String,
 	#[serde(rename = "launchAtLogin")] pub launch_at_login: bool,
 	/// Ports hidden from the discovered-listeners ("Detected") section.
@@ -130,6 +136,10 @@ fn default_waiting_title_badge() -> bool { false }
 /// and as the serde fallback for configs written before this field existed.
 fn default_metrics_interval_sec() -> u64 { 10 }
 
+/// Default agent-radar interval (seconds) — 5, the cadence this was hardcoded to
+/// before the setting existed, so an upgrade changes nothing until the user says so.
+fn default_agent_interval_sec() -> u64 { 5 }
+
 /// Default for [`Settings::track_agents`] — on, matching the behaviour before the
 /// setting existed, so upgrading never silently stops tracking.
 fn default_track_agents() -> bool { true }
@@ -140,6 +150,7 @@ impl Default for Settings {
 			terminal_app: "Terminal".into(),
 			poll_interval_sec: 3,
 			metrics_interval_sec: default_metrics_interval_sec(),
+			agent_interval_sec: default_agent_interval_sec(),
 			browser: "default".into(),
 			launch_at_login: false,
 			ignored_ports: Vec::new(),
@@ -211,6 +222,17 @@ mod tests {
 		assert_eq!(serde_json::to_string(&ItemKind::Docker).unwrap(), "\"docker\"");
 		assert_eq!(serde_json::to_string(&ItemKind::Command).unwrap(), "\"command\"");
 		assert_eq!(serde_json::to_string(&RunMode::Terminal).unwrap(), "\"terminal\"");
+	}
+
+	#[test]
+	fn settings_without_agent_interval_inherit_the_old_cadence() {
+		// A config written before the setting existed must keep behaving exactly as
+		// it did — the agent radar was hardcoded to 5 s.
+		let json = r#"{"terminalApp":"Terminal","pollIntervalSec":3,"browser":"default",
+			"launchAtLogin":false}"#;
+		let settings: Settings = serde_json::from_str(json).unwrap();
+		assert_eq!(settings.agent_interval_sec, 5);
+		assert_eq!(settings.metrics_interval_sec, 10);
 	}
 
 	#[test]

@@ -67,7 +67,12 @@ Each module has a single responsibility:
 
 ### Status polling
 
-A single background thread runs every `pollIntervalSec`:
+A single background thread runs every `pollIntervalSec`. This is the app's only
+always-on loop — it keeps running with the popover closed, because it drives the tray
+icon and the waiting-agent badge — so its per-pass cost is the app's energy floor.
+`brew services list` and `docker ps -a` are therefore spawned **once per pass**, not
+once per item, and parsed into a map the item loop looks up (the same batching
+`metrics::collect` does for `launchctl`/`lsof`). Each pass:
 
 - For each non-stopped item, it computes status:
   - **background:** is the child PID alive? then a port/HTTP check → `decide_status`. A dead PID records an error and yields `error`.
@@ -80,9 +85,9 @@ The poll loop deliberately releases the `running` lock before doing the (blockin
 
 ### Metrics sampling
 
-A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it idle-ticks every 500 ms and does no sampling work.
+A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it blocks on a condvar (`AppState::wait_visible`) rather than idle-ticking, so a closed popover costs zero wakeups and an open is picked up immediately. The interval between samples is a condvar wait too, carrying the visibility *generation* the pass started with — a hide→show that happens during a collection would otherwise notify a condvar nobody was waiting on and be slept through.
 
-Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta, then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
+Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta (cpu+memory only — the tree walk needs every process's parent, but not its argv, environ, cwd or disk I/O), then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
 
 ### Popover placement
 

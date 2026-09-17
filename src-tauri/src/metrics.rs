@@ -14,7 +14,7 @@ use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
-use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, ProcessesToUpdate, System};
+use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, Manager};
 
 /// Resource usage for one item, pushed to the frontend via `metrics_changed`.
@@ -136,10 +136,16 @@ pub fn collect(app: &AppHandle) -> Vec<ItemMetrics> {
 		Vec::new()
 	} else {
 		// Two refreshes 200 ms apart give cpu_usage() a valid delta to measure.
+		// `All` is required — the `children` map below walks every process to find
+		// each root's descendants — but only cpu+memory are read from it, so the
+		// default refresh kind (cmd, environ, cwd, disk, user for every process on
+		// the machine, twice) is pure waste. `parent()`/`run_time()` come from the
+		// basic process info that is always fetched.
+		let refresh = ProcessRefreshKind::nothing().with_cpu().with_memory();
 		let mut sys = System::new();
-		sys.refresh_processes(ProcessesToUpdate::All, true);
+		sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 		std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
-		sys.refresh_processes(ProcessesToUpdate::All, true);
+		sys.refresh_processes_specifics(ProcessesToUpdate::All, true, refresh);
 
 		let mut children: HashMap<u32, Vec<u32>> = HashMap::new();
 		let mut samples: HashMap<u32, (f32, u64)> = HashMap::new();
@@ -250,31 +256,34 @@ pub fn parse_mem_size(s: &str) -> u64 {
 	(n * mult) as u64
 }
 
-/// Spawn the visibility-gated metrics loop. Idle-ticks every 500 ms while hidden
-/// (≤0.5 s latency to first sample on open) and does no sampling work; while
-/// visible it samples, re-checks visibility, then emits `metrics_changed`.
+/// Spawn the visibility-gated metrics loop. Blocks on the visibility condvar while
+/// hidden — no idle tick, no wakeups, and a show is picked up immediately — then
+/// samples, re-checks visibility, and emits `metrics_changed`.
 pub fn spawn_metrics_loop(app: AppHandle) {
-	std::thread::spawn(move || loop {
-		let visible = app.state::<AppState>().visible.load(Ordering::Relaxed);
-		if !visible {
-			std::thread::sleep(Duration::from_millis(500));
-			continue;
+	std::thread::spawn(move || {
+		loop {
+			let generation = app.state::<AppState>().wait_visible();
+			let metrics = collect(&app);
+			// Re-check after the (~200 ms + lsof) collection: the popover may have
+			// closed meanwhile, in which case skip the emit.
+			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+				let _ = app.emit("metrics_changed", &metrics);
+			}
+			let interval = app
+				.state::<AppState>()
+				.config
+				.lock()
+				.unwrap()
+				.settings
+				.metrics_interval_sec
+				.max(1);
+			// Not a plain sleep: a hide (or a hide→show) during the collection above
+			// would otherwise be sat out for the whole interval. `wait_interval`
+			// compares the generation it was handed, so a change that happened while
+			// we were busy returns immediately and the loop re-evaluates.
+			app.state::<AppState>()
+				.wait_interval(generation, Duration::from_secs(interval));
 		}
-		let metrics = collect(&app);
-		// Re-check after the (~200 ms + lsof) collection: the popover may have
-		// closed meanwhile, in which case skip the emit.
-		if app.state::<AppState>().visible.load(Ordering::Relaxed) {
-			let _ = app.emit("metrics_changed", &metrics);
-		}
-		let interval = app
-			.state::<AppState>()
-			.config
-			.lock()
-			.unwrap()
-			.settings
-			.metrics_interval_sec
-			.max(1);
-		std::thread::sleep(Duration::from_secs(interval));
 	});
 }
 
