@@ -69,7 +69,12 @@ export function App(): React.JSX.Element {
 	// Pull the radar filter flag from persisted settings. Called on mount and
 	// after the settings dialog saves so the toggle takes effect immediately.
 	const reloadSettings = useCallback(async () => {
-		setRadarDevOnly((await getSettings()).radarDevOnly);
+		const settings = await getSettings();
+		setRadarDevOnly(settings.radarDevOnly);
+		// Tracking off: the backend stops emitting `agents_discovered`, so rows already
+		// on screen would linger. Clearing here also hides the Agents section, which
+		// renders only when there are agents.
+		if (!settings.trackAgents) setAgents([]);
 	}, []);
 
 	/**

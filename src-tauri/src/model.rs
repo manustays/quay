@@ -109,6 +109,12 @@ pub struct Settings {
 	/// switches to the waiting glyph regardless — this gates only the title text.
 	#[serde(rename = "waitingTitleBadge", default = "default_waiting_title_badge")]
 	pub waiting_title_badge: bool,
+	/// When false, the agent radar is switched off wholesale: the scan loop skips
+	/// its `ps`/`sysinfo` pass, the tray waiting badge stays clear, and the popover
+	/// drops its Agents section. On by default. Hooks already installed stay
+	/// installed — their state files are simply ignored while this is off.
+	#[serde(rename = "trackAgents", default = "default_track_agents")]
+	pub track_agents: bool,
 }
 
 /// Default for [`Settings::radar_dev_only`] — on. A bare `#[serde(default)]`
@@ -124,6 +130,10 @@ fn default_waiting_title_badge() -> bool { false }
 /// and as the serde fallback for configs written before this field existed.
 fn default_metrics_interval_sec() -> u64 { 10 }
 
+/// Default for [`Settings::track_agents`] — on, matching the behaviour before the
+/// setting existed, so upgrading never silently stops tracking.
+fn default_track_agents() -> bool { true }
+
 impl Default for Settings {
 	fn default() -> Self {
 		Self {
@@ -136,6 +146,7 @@ impl Default for Settings {
 			ignored_agents: Vec::new(),
 			radar_dev_only: true,
 			waiting_title_badge: false,
+			track_agents: true,
 		}
 	}
 }

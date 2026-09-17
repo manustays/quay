@@ -37,6 +37,10 @@ The file is written atomically (temp file + rename) on every change. If it ever 
 | `browser` | string | `"default"` | Reserved; the browser action currently always uses the system default browser. |
 | `launchAtLogin` | boolean | `false` | Whether the app is registered as a macOS login item. Toggle via Settings (it also calls the OS API). |
 | `ignoredPorts` | number[] | `[]` | Ports hidden from the popover's DETECTED (port radar) section. Add via a detected row's **Ignore** action; remove via the chips in Settings. |
+| `ignoredAgents` | `{agent, cwd}[]` | `[]` | Agent sessions hidden from the AGENTS section. Ignoring hides **all** sessions of that agent in that cwd. See [agent radar](agent-radar.md). |
+| `radarDevOnly` | boolean | `true` | When true, DETECTED hides listeners with no recognized dev stack (databases, caches, system services). |
+| `trackAgents` | boolean | `true` | Master switch for the [agent radar](agent-radar.md). When false the scan pass is skipped entirely, the menubar waiting signal stays clear, and the AGENTS section disappears. Installed hooks stay installed but are ignored. |
+| `waitingTitleBadge` | boolean | `false` | When true, the menubar title shows the count of agents waiting on you (e.g. `●2`) beside the tray icon. Requires `trackAgents`. |
 
 ## `items[]`
 

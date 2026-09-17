@@ -152,17 +152,34 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 						</label>
 
 						<label className="flex items-center justify-between gap-2 text-[13px]">
-							<span>Show waiting count in menubar</span>
+							<span>Track AI coding agents</span>
 							<Switch
-								checked={settings.waitingTitleBadge}
+								checked={settings.trackAgents}
+								onCheckedChange={(v) => set({ trackAgents: v })}
+							/>
+						</label>
+
+						{/* Both of these only mean anything while the radar is running, so they
+						    follow the toggle above rather than sitting there inert. */}
+						<label
+							className="flex items-center justify-between gap-2 pl-4 text-[13px]"
+							data-disabled={!settings.trackAgents}
+						>
+							<span className={settings.trackAgents ? undefined : 'text-muted-foreground'}>
+								Show waiting count in menubar
+							</span>
+							<Switch
+								disabled={!settings.trackAgents}
+								checked={settings.waitingTitleBadge && settings.trackAgents}
 								onCheckedChange={(v) => set({ waitingTitleBadge: v })}
 							/>
 						</label>
 
 						{hooks.length > 0 && (
-							<div className="grid gap-1.5">
+							<div className={`grid gap-1.5 ${settings.trackAgents ? '' : 'opacity-50'}`}>
 								<Label className="text-xs text-muted-foreground">
 									Agent radar hooks (working / waiting / idle)
+									{!settings.trackAgents && ' — tracking off'}
 								</Label>
 								{hooks.map((h) => (
 									<div key={h.agent} className="flex flex-col gap-0.5">
@@ -178,7 +195,7 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 												<Button
 													variant="ghost"
 													size="sm"
-													disabled={hookBusy === h.agent}
+													disabled={hookBusy === h.agent || !settings.trackAgents}
 													onClick={toggleHook(h)}
 												>
 													{h.installed ? 'Remove' : 'Install'}

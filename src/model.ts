@@ -66,6 +66,11 @@ export interface Settings {
 	radarDevOnly: boolean;
 	/** When true, the menubar title shows the count of waiting agents (e.g. `●2`). */
 	waitingTitleBadge: boolean;
+	/**
+	 * When false, the agent radar is off wholesale: no scan pass, no tray waiting
+	 * badge, no Agents section. Installed hooks stay installed but are ignored.
+	 */
+	trackAgents: boolean;
 }
 
 /**

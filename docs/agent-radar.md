@@ -9,6 +9,27 @@ sessions in the same folder club into one **project folder row** with a stack
 of overlapping agent badges on the right — which agents are in there, dimmed
 when idle — that expands into the member rows.
 
+## Switching it off
+
+**Settings → Track AI coding agents** (`trackAgents`, on by default) is a master
+switch, not a display filter. With it off:
+
+- the scan loop skips the radar pass outright, so the `ps` + sysinfo work below
+  never runs — turning it off actually costs nothing per tick;
+- `refresh_waiting_badge` forces the count to zero, so the tray's waiting glyph
+  and the `waitingTitleBadge` title clear immediately rather than freezing at
+  their last value. The hook-driven poll loop keeps calling it, so this holds
+  even though hooks keep firing;
+- the popover drops its AGENTS section, and any rows already on screen are
+  cleared when the setting is saved;
+- **Show waiting count in menubar** is disabled, since it has nothing to count.
+
+Hooks already installed are left alone — installing them is a deliberate,
+separate action that writes to your Claude/Codex config, so a settings flip does
+not undo it. Their state files are simply ignored while tracking is off, and the
+hooks list in Settings greys out. Turn tracking back on and the radar resumes on
+the next scan pass with no reinstall.
+
 ## How detection works
 
 - **Interactive session = agent process + attached tty.** Each scan pass runs

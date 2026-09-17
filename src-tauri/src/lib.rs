@@ -146,7 +146,19 @@ pub fn update_tray_icon(app: &tauri::AppHandle) {
 pub fn refresh_waiting_badge(app: &tauri::AppHandle) {
 	use std::sync::atomic::Ordering;
 	let st = app.state::<state::AppState>();
-	let ignored = st.config.lock().unwrap().settings.ignored_agents.clone();
+	let (track_agents, ignored) = {
+		let cfg = st.config.lock().unwrap();
+		(cfg.settings.track_agents, cfg.settings.ignored_agents.clone())
+	};
+	// Tracking off: force the badge to zero rather than skipping the refresh, so a
+	// count left over from before the toggle clears instead of sticking in the tray.
+	// This is also the hook-event path (`health.rs`), which keeps firing regardless.
+	if !track_agents {
+		if st.waiting_count.swap(0, std::sync::atomic::Ordering::Relaxed) != 0 {
+			update_tray_icon(app);
+		}
+		return;
+	}
 	let dir = st.dir.join("agent-state");
 	let count = {
 		let pids = st.last_agent_pids.lock().unwrap().clone();
