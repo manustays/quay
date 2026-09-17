@@ -1,3 +1,16 @@
+# [0.19.0](https://github.com/manustays/quay/compare/v0.18.0...v0.19.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **macos:** restore tray popover on macOS 27 ([6353955](https://github.com/manustays/quay/commit/6353955bf9bd951b9d3a8e7b38f03017566301c1)), closes [tauri-apps/tray-icon#365](https://github.com/tauri-apps/tray-icon/issues/365)
+
+
+### Features
+
+* add agent-interval setting, cut background CPU use ([f649905](https://github.com/manustays/quay/commit/f6499056d50a9faef70ed471d7cf1445d8f9d7b4))
+* **settings:** add toggle to turn agent tracking off ([df71c2d](https://github.com/manustays/quay/commit/df71c2d30a5a6e301eed1427c8d3f7de4c8636f1))
+
 # [0.18.0](https://github.com/manustays/quay/compare/v0.17.0...v0.18.0) (2026-09-15)
 
 
