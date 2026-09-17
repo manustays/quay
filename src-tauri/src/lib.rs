@@ -20,6 +20,17 @@ use tauri::{
 	WindowEvent,
 };
 
+/// Write a one-line diagnostic to stderr.
+///
+/// Quay ships no log file and no logging backend, so this is deliberately the cheapest
+/// thing that works: it is visible under `npm run tauri dev` or when the bundled binary is
+/// launched from a terminal (`/Applications/Quay.app/Contents/MacOS/quay`). A Finder or
+/// login-item launch discards stderr — these lines are for reproducing a fault, not for
+/// after-the-fact forensics. Reserved for genuine failures; the happy path stays silent.
+fn log_warn(context: &str, detail: impl std::fmt::Display) {
+	eprintln!("[quay] {context}: {detail}");
+}
+
 #[cfg(target_os = "macos")]
 #[derive(Clone, Copy)]
 struct TrayAnchor {
@@ -58,7 +69,10 @@ fn mac_screen_geometry(anchor: TrayAnchor) -> Option<MacScreenGeometry> {
 	use objc2_app_kit::NSScreen;
 	use objc2_foundation::MainThreadMarker;
 
-	let mtm = MainThreadMarker::new()?;
+	let Some(mtm) = MainThreadMarker::new() else {
+		log_warn("popover placement skipped", "NSScreen is only readable on the main thread");
+		return None;
+	};
 	NSScreen::screens(mtm).iter().find_map(|screen| {
 		let frame = screen.frame();
 		let contains = cocoa_frame_contains(
@@ -360,8 +374,20 @@ fn pin_under_tray(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 		use objc2_app_kit::NSWindow;
 		use objc2_foundation::NSPoint;
 
-		let Some(anchor) = *app.state::<TrayAnchorState>().0.lock().unwrap() else { return; };
-		let Some(screen) = mac_screen_geometry(anchor) else { return; };
+		// Each of these bails without placing the window, which also leaves
+		// `PopoverMonitorState` stale and skews the next `tray_is_on_current_monitor`
+		// check — worth a line rather than a silent return.
+		let Some(anchor) = *app.state::<TrayAnchorState>().0.lock().unwrap() else {
+			log_warn("popover placement skipped", "no tray anchor recorded yet");
+			return;
+		};
+		let Some(screen) = mac_screen_geometry(anchor) else {
+			log_warn(
+				"popover placement skipped",
+				format!("no screen contains anchor {:?}", anchor.native_point),
+			);
+			return;
+		};
 		let (mouse_x, _) = anchor.native_point;
 		let popup_width = 380.0;
 		let ideal_x = mouse_x - popup_width / 2.0;
@@ -371,7 +397,10 @@ fn pin_under_tray(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 				.max(screen.visible_origin.0),
 		);
 		let cocoa_y = screen.visible_origin.1 + screen.visible_size.1;
-		let Ok(ns_window) = win.ns_window() else { return; };
+		let Ok(ns_window) = win.ns_window() else {
+			log_warn("popover placement skipped", "window has no NSWindow handle");
+			return;
+		};
 		let ns_window: &NSWindow = &*ns_window.cast();
 		ns_window.setFrameTopLeftPoint(NSPoint::new(x, cocoa_y));
 		*app.state::<PopoverMonitorState>().0.lock().unwrap() =
@@ -394,30 +423,129 @@ fn tray_is_on_current_monitor(app: &tauri::AppHandle) -> bool {
 		.is_some_and(|current| current == &target_position)
 }
 
-/// Toggle the popover window: show+focus if hidden, hide if visible.
-fn toggle_popover(app: &tauri::AppHandle) {
+/// When hide-on-blur last closed the popover, so a tray click that arrives just
+/// afterwards can tell it already did the closing. See [`press_closes_popover`].
+#[cfg(target_os = "macos")]
+static LAST_BLUR_HIDE: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+
+/// Set on the press of a tray click that the popover's hide-on-blur already answered;
+/// read again on the matching release, which is where the toggle happens.
+#[cfg(target_os = "macos")]
+static PRESS_CLOSED_POPOVER: std::sync::atomic::AtomicBool =
+	std::sync::atomic::AtomicBool::new(false);
+
+/// How stale a blur-hide may be and still count as caused by the click being handled.
+/// Measured gap on macOS 27 is ~80 ms; this leaves a wide margin without being long
+/// enough to swallow a deliberate second click.
+#[cfg(target_os = "macos")]
+const BLUR_CLICK_GRACE: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Record that hide-on-blur, not the user, closed the popover just now.
+#[cfg(target_os = "macos")]
+fn note_blur_hide() {
+	*LAST_BLUR_HIDE.lock().unwrap() = Some(std::time::Instant::now());
+}
+
+/// Decide, on the press half of a tray click, whether this click has *already* closed the
+/// popover via hide-on-blur.
+///
+/// macOS 27 gives the status-item button key focus on mouse-down, so the popover resigns
+/// key and the blur handler hides it ~80 ms *before* `TrayIconEvent::Click` reaches us. By
+/// the time the release is handled the window looks hidden, so a naive toggle reopens it —
+/// the user sees a flicker instead of a close. The verdict is latched here, on the press,
+/// while the blur is still fresh, because a press held longer than the grace window would
+/// otherwise age out before its release arrived.
+#[cfg(target_os = "macos")]
+fn press_closes_popover() {
+	let closed = LAST_BLUR_HIDE
+		.lock()
+		.unwrap()
+		.take()
+		.is_some_and(|at| at.elapsed() < BLUR_CLICK_GRACE);
+	PRESS_CLOSED_POPOVER.store(closed, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Take the verdict latched by [`press_closes_popover`], clearing it.
+#[cfg(target_os = "macos")]
+fn take_press_closed_popover() -> bool {
+	PRESS_CLOSED_POPOVER.swap(false, std::sync::atomic::Ordering::Relaxed)
+}
+
+fn show_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 	use std::sync::atomic::Ordering;
-	if let Some(win) = app.get_webview_window("main") {
-		if win.is_visible().unwrap_or(false) {
-			#[cfg(target_os = "macos")]
-			if !tray_is_on_current_monitor(app) {
-				// A click on another display moves the open popover there instead of
-				// consuming the click as a close, so each menubar icon feels local.
-				pin_under_tray(app, &win);
-				let _ = win.set_focus();
-				return;
-			}
-			// Mirror `visible` to the actual outcome of the window op.
-			if win.hide().is_ok() {
-				app.state::<state::AppState>().visible.store(false, Ordering::Relaxed);
-			}
-		} else {
-			pin_under_tray(app, &win);
-			if win.show().is_ok() {
-				app.state::<state::AppState>().visible.store(true, Ordering::Relaxed);
-				let _ = win.set_focus();
+	// Mirror `visible` to the actual outcome of the window op.
+	match win.show() {
+		Ok(()) => {
+			app.state::<state::AppState>().visible.store(true, Ordering::Relaxed);
+			if let Err(e) = win.set_focus() {
+				log_warn("popover focus failed", e);
 			}
 		}
+		Err(e) => log_warn("popover show failed", e),
+	}
+}
+
+fn hide_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
+	use std::sync::atomic::Ordering;
+	match win.hide() {
+		Ok(()) => app.state::<state::AppState>().visible.store(false, Ordering::Relaxed),
+		Err(e) => log_warn("popover hide failed", e),
+	}
+}
+
+/// Toggle the popover window: show+focus if hidden, hide if visible.
+///
+/// `already_closed` reports that hide-on-blur beat this click to the punch (see
+/// [`press_closes_popover`]), so the popover counts as open even though the window is
+/// hidden — otherwise the click reopens what it was meant to close.
+fn toggle_popover(app: &tauri::AppHandle, already_closed: bool) {
+	let Some(win) = app.get_webview_window("main") else {
+		log_warn("popover toggle failed", "no window labelled \"main\"");
+		return;
+	};
+	if already_closed || win.is_visible().unwrap_or(false) {
+		#[cfg(target_os = "macos")]
+		if !tray_is_on_current_monitor(app) {
+			// A click on another display moves the open popover there instead of
+			// consuming the click as a close, so each menubar icon feels local.
+			// `show_popover` because hide-on-blur may already have closed it.
+			pin_under_tray(app, &win);
+			show_popover(app, &win);
+			return;
+		}
+		hide_popover(app, &win);
+	} else {
+		pin_under_tray(app, &win);
+		show_popover(app, &win);
+	}
+}
+
+/// Present the tray context menu, attaching the `NSMenu` only while it is on screen.
+///
+/// macOS 27 stopped forwarding status-item clicks to `tray-icon`'s tracking view whenever
+/// an `NSMenu` is attached to the `NSStatusItem` — AppKit's menu tracking swallows them —
+/// so leaving the menu attached kills the left-click → popover path outright. Attaching
+/// on demand keeps both gestures. This mirrors the upstream fix (tauri-apps/tray-icon#365),
+/// which Tauri cannot pull in yet: it shipped in tray-icon 0.25.1 while tauri 2.11 still
+/// requires `^0.24`. Once Tauri depends on tray-icon >= 0.25.1, delete this function and
+/// its event arm and restore the plain `.menu(&tray_menu)` on the builder.
+///
+/// Runs inline on purpose. Tray events are delivered on the main thread, and Tauri's
+/// main-thread dispatch calls straight through when it is already there, so `show_menu`
+/// (an `NSStatusBarButton::performClick`) runs AppKit's nested menu loop and returns only
+/// once the menu has been dismissed — exactly when it should be detached again.
+#[cfg(target_os = "macos")]
+fn show_tray_menu(tray: &tauri::tray::TrayIcon, menu: &tauri::menu::Menu<tauri::Wry>) {
+	if let Err(e) = tray.set_menu(Some(menu.clone())) {
+		log_warn("tray menu attach failed", e);
+		return;
+	}
+	if let Err(e) = tray.with_inner_tray_icon(|inner| inner.show_menu()) {
+		log_warn("tray menu present failed", e);
+	}
+	// Detach unconditionally: a menu left attached is precisely what breaks clicks.
+	if let Err(e) = tray.set_menu(None::<tauri::menu::Menu<tauri::Wry>>) {
+		log_warn("tray menu detach failed", e);
 	}
 }
 
@@ -624,31 +752,67 @@ pub fn run() {
 
 			let tray_menu = MenuBuilder::new(app).items(&[&title_item, &check_updates, &divider, &quit]).build()?;
 
-			TrayIconBuilder::with_id("main")
+			// macOS 27 stops delivering status-item clicks to tray-icon's tracking view
+			// while an NSMenu is attached, so on macOS the menu is attached only for as
+			// long as it is on screen — see `show_tray_menu`. Every other platform keeps
+			// it attached for the whole session as before.
+			#[cfg(target_os = "macos")]
+			let menu_for_right_click = tray_menu.clone();
+
+			#[allow(unused_mut)]
+			let mut tray = TrayIconBuilder::with_id("main")
 				// Monochrome buoy glyph rendered as a macOS template image so it
 				// auto-inverts (black/white) with the menubar's light/dark theme.
 				// `update_tray_icon` swaps in colored (non-template) variants when
 				// any service errors or is starting.
 				.icon(tauri::include_image!("icons/tray.png"))
 				.icon_as_template(true)
-				.menu(&tray_menu)
 				// Only show the context menu on right-click; left-click toggles the popover.
-				.show_menu_on_left_click(false)
-				.on_tray_icon_event(|tray, event| {
+				.show_menu_on_left_click(false);
+
+			#[cfg(not(target_os = "macos"))]
+			{
+				tray = tray.menu(&tray_menu);
+			}
+
+			tray
+				.on_tray_icon_event(move |tray, event| {
 					tauri_plugin_positioner::on_tray_event(tray.app_handle(), &event);
-					if let TrayIconEvent::Click {
-						button: MouseButton::Left,
-						button_state: MouseButtonState::Up,
-						..
-					} = event
-					{
-						#[cfg(target_os = "macos")]
-						{
-							let point = objc2_app_kit::NSEvent::mouseLocation();
-							*tray.app_handle().state::<TrayAnchorState>().0.lock().unwrap() =
-								Some(TrayAnchor { native_point: (point.x, point.y) });
+					match event {
+						TrayIconEvent::Click {
+							button: MouseButton::Left,
+							button_state: MouseButtonState::Up,
+							..
+						} => {
+							#[cfg(target_os = "macos")]
+							{
+								let point = objc2_app_kit::NSEvent::mouseLocation();
+								*tray.app_handle().state::<TrayAnchorState>().0.lock().unwrap() =
+									Some(TrayAnchor { native_point: (point.x, point.y) });
+							}
+							#[cfg(target_os = "macos")]
+							let already_closed = take_press_closed_popover();
+							#[cfg(not(target_os = "macos"))]
+							let already_closed = false;
+							toggle_popover(tray.app_handle(), already_closed);
 						}
-						toggle_popover(tray.app_handle());
+						// The press half only records whether this same click has already
+						// closed the popover through hide-on-blur; the release toggles.
+						#[cfg(target_os = "macos")]
+						TrayIconEvent::Click {
+							button: MouseButton::Left,
+							button_state: MouseButtonState::Down,
+							..
+						} => press_closes_popover(),
+						// On press, not release: that is when every other macOS menubar
+						// item opens its menu, and it keeps press-drag-release selection.
+						#[cfg(target_os = "macos")]
+						TrayIconEvent::Click {
+							button: MouseButton::Right,
+							button_state: MouseButtonState::Down,
+							..
+						} => show_tray_menu(tray, &menu_for_right_click),
+						_ => {}
 					}
 				})
 				.on_menu_event(|app, event| match event.id().as_ref() {
@@ -710,6 +874,10 @@ pub fn run() {
 								.state::<state::AppState>()
 								.visible
 								.store(false, std::sync::atomic::Ordering::Relaxed);
+							// A tray click arriving right after this is the click that
+							// caused it, and must not reopen what it just closed.
+							#[cfg(target_os = "macos")]
+							note_blur_hide();
 						}
 					}
 				}

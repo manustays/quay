@@ -43,6 +43,16 @@ For a build that opens with no warning, sign and notarize it — see [Packaging]
 - The app lives in the **menubar** (top-right), not the Dock. Look for its tray icon.
 - **Left-click** the icon for the popover; **right-click** for the **Quit** menu.
 
+## Clicking the menubar icon only opens the Quit menu (macOS 27)
+
+On macOS 27, Quay 0.18.0 and earlier show the right-click menu ("Check for Updates…",
+"Quit") on *every* click and never open the popover. macOS changed how it delivers clicks
+to menubar icons that have a menu attached, and the click stopped reaching Quay.
+
+Fixed in the next release. Right-click the icon → **Check for Updates…** to update, or
+grab the latest DMG from [Releases](https://github.com/manustays/quay/releases). Older
+macOS versions are unaffected.
+
 ## The popover opens on the wrong display, or not at all
 
 With multiple displays, the popover should open under the menubar icon you clicked (see [Multiple displays](usage.md#multiple-displays)). Quay 0.17.0 and earlier could place it on the other display, far from the icon, or completely off-screen on mixed Retina / non-Retina setups — especially displays stacked vertically — until the app was restarted. Update to the latest version.
