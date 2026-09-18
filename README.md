@@ -150,6 +150,7 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 | [Port radar](docs/port-radar.md) | How unmanaged listeners are discovered, adopted, killed, ignored |
 | [Agent radar](docs/agent-radar.md) | How terminal AI-agent sessions are detected, the working/idle/waiting states, and installing per-agent hooks |
 | [Metrics](docs/metrics.md) | How live CPU/memory sampling works (processes + `docker stats`) |
+| [Performance](docs/performance.md) | Measuring Quay's own CPU and idle wakeups, and what the current readings are |
 | [Configuration](docs/configuration.md) | `config.json` location + full field reference |
 | [Packaging & distribution](docs/packaging.md) | Build a `.dmg`, code-sign, notarize, and the release CI |
 | [Development](docs/development.md) | Dev setup, project layout, running tests |
