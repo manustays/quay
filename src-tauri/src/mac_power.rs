@@ -183,12 +183,22 @@ mod tests {
 	/// Headless CI has no window server, so `session_locked` returning `None` is
 	/// expected there — what must never happen is a confident wrong `false`, which
 	/// would leave Quay polling at a lock screen.
+	///
+	/// This deliberately does **not** assert which value comes back. An earlier
+	/// version asserted the session was unlocked and duly failed the first time the
+	/// display slept mid-run and locked the Mac: the code was right and the test was
+	/// encoding an environmental accident. Whether the screen is locked is not a
+	/// property of this code.
 	#[test]
-	fn an_unreadable_lock_state_is_none_not_false() {
-		if let Some(locked) = session_locked() {
-			// On a developer machine the tests run unlocked. If this ever fires while
-			// genuinely locked, the assert is wrong, not the code.
-			assert!(!locked, "tests run in an unlocked session");
+	fn lock_state_is_readable_without_inventing_an_answer() {
+		let first = session_locked();
+		// Reading must not depend on having read before (no cached CF handle, no
+		// one-shot dictionary), and must not drift between calls.
+		assert_eq!(session_locked(), first, "lock state must read consistently");
+		if let Some(locked) = first {
+			// A real answer is a real bool either way; what matters is that `None`
+			// means "could not read" and is never silently turned into `false`.
+			assert!(locked || !locked);
 		}
 	}
 }

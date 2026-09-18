@@ -13,3 +13,6 @@ publish = false
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 dirs = "5"
+# libproc, for the parent/start-time/tty lookup the hook does on every event.
+# Forking `ps` there is not an option: PostToolUse fires on every tool call.
+libc = "0.2"

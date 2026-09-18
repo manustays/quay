@@ -204,7 +204,7 @@ OpenCode/Pi files are small plugins that shell out to the same `quay-hook`
 helper, so there is one audited state-writer for every agent.
 
 How the radar consumes it: `quay-hook` writes one small JSON file per session
-(`{ agent, cwd, state, ts }`) under
+(`{ agent, cwd, state, ts }`, plus `name`, `pid`, `startedAt` and `tty` when known) under
 `~/Library/Application Support/am.abhi.quay/agent-state/`, keyed by session and
 tagged with the agent so two agents sharing a folder don't collide. The always-on poll
 reads them (`pollIntervalSec`, independent of `agentIntervalSec`). It trusts **waiting** outright and a **fresh working** (event
@@ -214,11 +214,38 @@ files are pruned after a 10-minute grace, and corrupt/partial files are dropped
 on read. Writes are atomic (temp + rename), so a mid-write poll never reads
 half a file.
 
+### Process identity in the state file
+
+None of the four agents put a pid in their hook payload, which is why sessions were
+keyed by `(agent, cwd)` and why deciding whether one was still alive meant forking
+`ps`. The helper now resolves it itself, without forking — `PostToolUse` fires on
+every tool call, so a `ps` per event was never an option. `libproc`
+(`proc_pidinfo`/`PROC_PIDTBSDINFO`) answers all of it with a syscall:
+
+| Field | Source | Why |
+|---|---|---|
+| `pid` | ancestry walk, or `--pid` | identity and liveness without `ps` |
+| `startedAt` | `pbi_start_tvsec` | **pids are recycled** — `kill(pid, 0)` would report a different process alive under a dead session's number, and after a reboot that is near certain. The `(pid, startedAt)` pair is the identity; the pid alone is not |
+| `tty` | `e_tdev` → `devname(3)` | `sysinfo` cannot report a controlling terminal on macOS at all, and jump-to-session needs one to find the window |
+
+opencode and pi run their adapter *inside* the agent, so they pass `--pid`. Claude and
+codex invoke the helper as a subprocess, so it walks up its own ancestry (up to 8 hops,
+past the shell that ran it) looking for an executable whose basename is that agent.
+
+**It stamps nothing rather than guessing.** If the walk finds no match, the fields are
+omitted and the reader falls back to the old `(agent, cwd)` behaviour. Stamping the
+wrong pid would be worse than none: the shell that ran the hook exits the moment the
+hook does, so a file carrying *its* pid would read as dead immediately and the session
+would vanish from the radar.
+
+All four fields are optional, so a file written by an older helper still parses.
+
 ### Manual install (appendix)
 
 The Settings button is the supported path; this is the equivalent by hand, e.g.
-for Claude Code. `quay-hook` takes `<state> [agent]` — the agent defaults to
-`claude` when omitted, so a pre-existing single-arg install keeps working.
+for Claude Code. `quay-hook` takes `<state> [agent] [--pid N]` — the agent defaults to
+`claude` when omitted, so a pre-existing single-arg install keeps working, and `--pid`
+is only for an adapter running inside the agent that already knows it.
 
 ```sh
 cargo build --release --manifest-path src-tauri/Cargo.toml -p quay-hook
