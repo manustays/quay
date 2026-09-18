@@ -36,16 +36,33 @@ struct HookSpec {
 const CLAUDE_NEEDS_YOU: &str =
 	"permission_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog";
 
+/// Which `SessionStart` sources mean "a session now exists and is at rest".
+///
+/// `compact` is excluded for the same reason it is on Codex: compaction happens
+/// *inside* a turn, so reporting idle there blanks a working row exactly when the
+/// agent is busiest. Codex documents this outright; Claude's docs are ambiguous, and
+/// the asymmetry settles it — wrongly including `compact` is a visible wrong state,
+/// while wrongly excluding it only delays discovery until the session's next event.
+///
+/// `clear` and `fork` are included: both may hand the session a new id, and a
+/// session whose id we have never seen is a session that does not exist as far as
+/// the radar is concerned.
+const CLAUDE_SESSION_OPENED: &str = "startup|resume|clear|fork";
+
 /// Claude Code (`~/.claude/settings.json`). PostToolUse → working is what clears
-/// amber after you approve a permission prompt.
+/// amber after you approve a permission prompt; `PostToolUseFailure` is the same
+/// signal for a tool call that errored, which otherwise left the session looking
+/// stale until its next success.
 // ponytail: `PermissionRequest` is now a dedicated event and would be a more exact
 // waiting signal than the filtered Notification — but its hooks can return an
 // allow/deny decision, and this helper exits 0 with empty stdout. Verify that reads
 // as "decline to decide" for Claude (it does for codex) before switching; getting it
 // wrong would change permission behaviour, not just a status dot.
 const CLAUDE_SPECS: &[HookSpec] = &[
+	HookSpec { event: "SessionStart", matcher: Some(CLAUDE_SESSION_OPENED), state: "idle" },
 	HookSpec { event: "UserPromptSubmit", matcher: None, state: "working" },
 	HookSpec { event: "PostToolUse", matcher: Some(""), state: "working" },
+	HookSpec { event: "PostToolUseFailure", matcher: Some(""), state: "working" },
 	HookSpec { event: "Notification", matcher: Some(CLAUDE_NEEDS_YOU), state: "waiting" },
 	HookSpec { event: "Stop", matcher: None, state: "idle" },
 	HookSpec { event: "SessionEnd", matcher: None, state: "ended" },
@@ -56,9 +73,12 @@ const CLAUDE_SPECS: &[HookSpec] = &[
 /// `compact` is deliberately **excluded**: Codex runs `SessionStart` hooks matching
 /// `source: "compact"` after it auto-compacts, *before the next model request* — i.e.
 /// in the middle of a turn. Mapping that to idle would blank a working row exactly
-/// when the agent is busiest. `clear` is excluded for the same reason it isn't
-/// needed: `Stop` has already marked the session idle by then.
-const CODEX_SESSION_OPENED: &str = "startup|resume";
+/// when the agent is busiest.
+///
+/// `clear` is included. `Stop` has usually marked the session idle by then, so the
+/// report is often redundant — but a cleared session may carry a new id, and one the
+/// radar has never seen does not exist as far as it is concerned.
+const CODEX_SESSION_OPENED: &str = "startup|resume|clear";
 
 /// Codex (`~/.codex/hooks.json`).
 ///
@@ -379,7 +399,7 @@ mod tests {
 		// User's key and their own Stop hook both survive.
 		assert!(once.contains("\"model\": \"opus\""));
 		assert!(once.contains("my-own-thing"));
-		// Our five events are present, commands reference the helper + agent tag.
+		// Our events are present, commands reference the helper + agent tag.
 		assert!(once.contains("UserPromptSubmit"));
 		assert!(once.contains("SessionEnd"));
 		assert!(once.contains(&helper_str));
@@ -585,6 +605,65 @@ mod tests {
 		assert!(end[0].get("matcher").is_none(), "SessionEnd must match every reason");
 		let command = end[0]["hooks"][0]["command"].as_str().unwrap();
 		assert!(command.contains("ended codex"), "SessionEnd must clear the state file");
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn claude_session_start_ignores_compaction_but_catches_clear_and_fork() {
+		// Compaction happens inside a turn, so reporting idle there blanks a working
+		// row. `clear` and `fork` may hand the session a new id, and a session id the
+		// radar has never seen is one it does not know exists.
+		let d = tmp();
+		let cfg = d.join(".claude/settings.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let helper = PathBuf::from("/tmp/quay-hook");
+		install_json_hooks(&cfg, &helper, "claude", CLAUDE_SPECS).unwrap();
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		let start = v["hooks"]["SessionStart"].as_array().unwrap();
+		assert_eq!(start.len(), 1);
+		let matcher = start[0]["matcher"].as_str().expect("SessionStart must be filtered");
+		for opened in ["startup", "resume", "clear", "fork"] {
+			assert!(matcher.contains(opened), "{opened} opens a session the radar must see");
+		}
+		assert!(!matcher.contains("compact"), "compaction is mid-turn, not a session at rest");
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn a_failed_tool_call_still_marks_the_session_working() {
+		// PostToolUse fires only on success, so a session whose tool call errored got
+		// no refresh and looked stale until its next successful call.
+		let d = tmp();
+		let cfg = d.join(".claude/settings.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let helper = PathBuf::from("/tmp/quay-hook");
+		install_json_hooks(&cfg, &helper, "claude", CLAUDE_SPECS).unwrap();
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		let failed = v["hooks"]["PostToolUseFailure"].as_array().unwrap();
+		assert_eq!(failed.len(), 1);
+		assert_eq!(failed[0]["matcher"], "", "every tool, not a subset");
+		assert!(failed[0]["hooks"][0]["command"].as_str().unwrap().contains("working claude"));
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn a_cleared_codex_session_is_still_discovered() {
+		// Same reasoning as Claude's `clear`: the session may come back with a new id.
+		let d = tmp();
+		let cfg = d.join(".codex/hooks.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let helper = PathBuf::from("/tmp/quay-hook");
+		install_json_hooks(&cfg, &helper, "codex", CODEX_SPECS).unwrap();
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		let matcher = v["hooks"]["SessionStart"][0]["matcher"].as_str().unwrap();
+		assert!(matcher.contains("clear"));
+		assert!(!matcher.contains("compact"));
 
 		std::fs::remove_dir_all(&d).ok();
 	}

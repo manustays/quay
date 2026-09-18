@@ -148,8 +148,8 @@ Each agent's config and event mapping:
 
 | Agent | Config Quay writes | Events → state | Waiting? |
 |---|---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | UserPromptSubmit/PostToolUse → working · Notification *(filtered)* → waiting · Stop → idle · SessionEnd → ended | yes |
-| **Codex** | `~/.codex/hooks.json` | SessionStart *(startup/resume)* → idle · UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle · SessionEnd → ended | yes |
+| **Claude Code** | `~/.claude/settings.json` | SessionStart *(startup/resume/clear/fork)* → idle · UserPromptSubmit/PostToolUse/PostToolUseFailure → working · Notification *(filtered)* → waiting · Stop → idle · SessionEnd → ended | yes |
+| **Codex** | `~/.codex/hooks.json` | SessionStart *(startup/resume/clear)* → idle · UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle · SessionEnd → ended | yes |
 | **OpenCode** | `~/.config/opencode/plugin/quay.js` | permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
 | **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_settled → idle | no (no built-in permission prompt) |
 
@@ -160,10 +160,19 @@ waiting agent — an amber row and a tray badge for a session that wanted nothin
 `idle_prompt` is excluded too: it nudges about a session `Stop` has already marked
 idle, so counting it would badge every finished session a minute after it finished.
 
-Codex's `SessionStart` is filtered to **`startup|resume`**. Codex runs `SessionStart`
-hooks matching `source: "compact"` after auto-compaction, *before the next model
-request* — mid-turn — so matching it would blank a working row exactly when the agent
-is busiest. Its `SessionEnd` carries no matcher: `reason` is always `other` today, and
+**Both agents' `SessionStart` excludes `compact`.** Codex runs `SessionStart` hooks
+matching `source: "compact"` after auto-compaction, *before the next model request* —
+mid-turn — so matching it would blank a working row exactly when the agent is busiest.
+Claude's docs are ambiguous on the same point, and the asymmetry settles it: wrongly
+including `compact` is a visible wrong state, while wrongly excluding it only delays
+discovery until the session's next event.
+
+`clear` (and `fork`, on Claude) *are* included, because either may hand the session a
+new id — and a session id the radar has never seen is one it does not know exists.
+
+`PostToolUseFailure` carries the same `working` signal as `PostToolUse`, which fires
+only on success; without it a session whose tool call errored looked stale until its
+next successful call. Its `SessionEnd` carries no matcher: `reason` is always `other` today, and
 omitting it keeps catching whatever Codex adds later. Note that Codex also fires
 `SessionEnd` after 30 minutes of inactivity, so a still-running CLI can lose its hook
 state and fall back to the radar's own view of the process.
