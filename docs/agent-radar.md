@@ -148,10 +148,26 @@ Each agent's config and event mapping:
 
 | Agent | Config Quay writes | Events → state | Waiting? |
 |---|---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | UserPromptSubmit/PostToolUse → working · Notification → waiting · Stop → idle · SessionEnd → ended | yes |
+| **Claude Code** | `~/.claude/settings.json` | UserPromptSubmit/PostToolUse → working · Notification *(filtered)* → waiting · Stop → idle · SessionEnd → ended | yes |
 | **Codex** | `~/.codex/hooks.json` | UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle | yes |
 | **OpenCode** | `~/.config/opencode/plugin/quay.js` | permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
-| **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_end → idle | no (no permission event) |
+| **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_settled → idle | no (no built-in permission prompt) |
+
+**The `Notification` matcher is not optional.** `Notification` is a catch-all that also
+fires for `auth_success`, `quota_auto_resume_fired` and the `elicitation_complete`
+/`elicitation_response` pair. Subscribing to it unfiltered made every one of those a
+waiting agent — an amber row and a tray badge for a session that wanted nothing.
+`idle_prompt` is excluded too: it nudges about a session `Stop` has already marked
+idle, so counting it would badge every finished session a minute after it finished.
+
+Pi reports idle on **`agent_settled`, not `agent_end`** — a run can end and then be
+continued by pi's own retries, compaction or follow-ups, so `agent_end` flashed the row
+idle in the middle of work.
+
+Installed configs are **refreshed on launch** for agents already opted in
+(`hooks_install::refresh_installed`), because what we install changes between versions;
+a corrected matcher would otherwise only reach someone who toggled the hook off and on.
+It never installs for an agent that has none.
 
 `PostToolUse → working` is what clears amber after you approve a permission —
 on approval only the tool runs, no `UserPromptSubmit` fires. The
@@ -190,7 +206,10 @@ cp src-tauri/target/release/quay-hook ~/.local/bin/quay-hook
       { "matcher": "", "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook working claude", "timeout": 5 }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook waiting claude", "timeout": 5 }] }
+      {
+        "matcher": "permission_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog",
+        "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook waiting claude", "timeout": 5 }]
+      }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook idle claude", "timeout": 5 }] }

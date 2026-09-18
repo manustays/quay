@@ -718,10 +718,19 @@ pub fn run() {
 				let app_handle = app.handle().clone();
 				std::thread::spawn(move || {
 					let st = app_handle.state::<state::AppState>();
-					if st.dir.join("bin/quay-hook").exists() {
-						if let Some(src) = hooks_install::bundled_hook(&app_handle) {
-							let _ = hooks_install::install_helper(&src, &st.dir);
-						}
+					if !st.dir.join("bin/quay-hook").exists() {
+						return;
+					}
+					if let Some(src) = hooks_install::bundled_hook(&app_handle) {
+						let _ = hooks_install::install_helper(&src, &st.dir);
+					}
+					// The configs themselves also go stale: a corrected event matcher or
+					// a fixed plugin would otherwise only reach someone who toggled the
+					// hook off and on in Settings. Only refreshes agents already opted in.
+					let Some(home) = dirs::home_dir() else { return };
+					let refreshed = hooks_install::refresh_installed(&home, &st.dir);
+					if !refreshed.is_empty() {
+						log_trace("hooks refreshed", refreshed.join(", "));
 					}
 				});
 			}

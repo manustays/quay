@@ -22,12 +22,31 @@ struct HookSpec {
 	state: &'static str,
 }
 
+/// Which `Notification` sub-types actually mean "this session needs you".
+///
+/// `Notification` is a catch-all: it also fires for `auth_success`,
+/// `quota_auto_resume_fired`, `elicitation_complete` and more. Subscribing without
+/// a matcher turned every one of those into a waiting agent — a false amber row and
+/// a false tray badge.
+///
+/// `idle_prompt` is deliberately **excluded**. It fires when Claude Code nudges you
+/// about a session that has been sitting idle, so including it would flip every
+/// finished session to amber a minute after `Stop` already marked it idle, and the
+/// tray badge counts waiting agents.
+const CLAUDE_NEEDS_YOU: &str =
+	"permission_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog";
+
 /// Claude Code (`~/.claude/settings.json`). PostToolUse → working is what clears
 /// amber after you approve a permission prompt.
+// ponytail: `PermissionRequest` is now a dedicated event and would be a more exact
+// waiting signal than the filtered Notification — but its hooks can return an
+// allow/deny decision, and this helper exits 0 with empty stdout. Verify that reads
+// as "decline to decide" for Claude (it does for codex) before switching; getting it
+// wrong would change permission behaviour, not just a status dot.
 const CLAUDE_SPECS: &[HookSpec] = &[
 	HookSpec { event: "UserPromptSubmit", matcher: None, state: "working" },
 	HookSpec { event: "PostToolUse", matcher: Some(""), state: "working" },
-	HookSpec { event: "Notification", matcher: None, state: "waiting" },
+	HookSpec { event: "Notification", matcher: Some(CLAUDE_NEEDS_YOU), state: "waiting" },
 	HookSpec { event: "Stop", matcher: None, state: "idle" },
 	HookSpec { event: "SessionEnd", matcher: None, state: "ended" },
 ];
@@ -240,6 +259,29 @@ pub fn uninstall(agent: &str, home: &Path, helper: &Path) -> Result<(), AppError
 	}
 }
 
+/// Re-apply the hook config of every agent that already has one.
+///
+/// [`install`] is idempotent and path-updating by design, so this is safe to run on
+/// every launch. It exists because the *content* of what we install changes between
+/// app versions — a corrected event matcher, a fixed plugin — and without this those
+/// corrections would only reach a user who happened to toggle the hook off and on in
+/// Settings. Same rule as the helper refresh: **never installs for an agent that has
+/// none**, so it can't opt anyone in behind their back.
+///
+/// Returns the agents it refreshed, for the caller to trace.
+pub fn refresh_installed(home: &Path, data_dir: &Path) -> Vec<&'static str> {
+	let helper = data_dir.join("bin/quay-hook");
+	if !helper.exists() {
+		return Vec::new();
+	}
+	statuses(home, data_dir)
+		.into_iter()
+		.filter(|s| s.installed)
+		.filter(|s| install(s.agent, home, &helper).is_ok())
+		.map(|s| s.agent)
+		.collect()
+}
+
 fn file_contains(path: &Path, needle: &str) -> bool {
 	std::fs::read_to_string(path).is_ok_and(|s| s.contains(needle))
 }
@@ -392,6 +434,93 @@ mod tests {
 		assert!(get("opencode"));
 		assert!(!get("codex"));
 		assert!(!get("pi"));
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn claude_notification_hook_is_filtered_to_events_that_need_you() {
+		// Regression: subscribing to Notification with no matcher made every
+		// notification a waiting agent — auth_success, quota auto-resume and the
+		// elicitation_complete/response pair included — so rows went amber and the
+		// tray badge counted sessions that wanted nothing.
+		let d = tmp();
+		let cfg = d.join(".claude/settings.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let helper = PathBuf::from("/tmp/quay-hook");
+		install_json_hooks(&cfg, &helper, "claude", CLAUDE_SPECS).unwrap();
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		let groups = v["hooks"]["Notification"].as_array().unwrap();
+		assert_eq!(groups.len(), 1);
+		let matcher = groups[0]["matcher"].as_str().expect("Notification must carry a matcher");
+
+		for needs_you in ["permission_prompt", "agent_needs_input", "elicitation_dialog"] {
+			assert!(matcher.contains(needs_you), "{needs_you} should mark the session waiting");
+		}
+		for noise in ["auth_success", "quota_auto_resume_fired", "elicitation_complete"] {
+			assert!(!matcher.contains(noise), "{noise} must not mark the session waiting");
+		}
+		// `idle_prompt` is a nudge about an already-idle session; Stop has marked it
+		// idle already, so counting it would badge every finished session.
+		assert!(!matcher.contains("idle_prompt"), "idle_prompt must not count as waiting");
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn pi_extension_settles_before_reporting_idle() {
+		// `agent_end` fires when a run ends, but pi may auto-retry or continue, so
+		// the row flashed idle mid-work. `agent_settled` is the one that means done.
+		assert!(PI_TS.contains("agent_settled"), "pi must report idle on agent_settled");
+		assert!(
+			!PI_TS.contains("\"agent_end\""),
+			"agent_end is premature — pi retries and continues after it"
+		);
+	}
+
+	#[test]
+	fn refresh_updates_an_installed_config_but_never_opts_anyone_in() {
+		// The content we install changes between app versions. Without this refresh a
+		// corrected matcher would only reach someone who toggled the hook in Settings.
+		let d = tmp();
+		let data = d.join("data");
+		std::fs::create_dir_all(data.join("bin")).unwrap();
+		let helper = data.join("bin/quay-hook");
+		std::fs::write(&helper, b"#!/bin/sh\n").unwrap();
+
+		// claude is opted in, but with a stale group: no matcher on Notification.
+		let cfg = d.join(".claude/settings.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let stale = format!(
+			r#"{{"hooks":{{"Notification":[{{"hooks":[{{"type":"command","command":"\"{}\" waiting claude"}}]}}]}}}}"#,
+			helper.display()
+		);
+		std::fs::write(&cfg, &stale).unwrap();
+
+		let refreshed = refresh_installed(&d, &data);
+		assert_eq!(refreshed, vec!["claude"], "only the opted-in agent is refreshed");
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		assert!(
+			v["hooks"]["Notification"][0]["matcher"].is_string(),
+			"the stale unmatched group must be corrected in place"
+		);
+		// Agents that were never opted in stay that way — no file created.
+		assert!(!d.join(".codex/hooks.json").exists());
+		assert!(!d.join(".config/opencode/plugin/quay.js").exists());
+		assert!(!d.join(".pi/agent/extensions/quay.ts").exists());
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn refresh_is_a_no_op_without_the_helper() {
+		// Nobody has opted in, so nothing should be written anywhere.
+		let d = tmp();
+		let data = d.join("data");
+		std::fs::create_dir_all(&data).unwrap();
+		assert!(refresh_installed(&d, &data).is_empty());
+		assert!(!d.join(".claude/settings.json").exists());
 		std::fs::remove_dir_all(&d).ok();
 	}
 }
