@@ -18,6 +18,10 @@ under `caffeinate -di`, so a display or idle sleep can't truncate a run.
 
 Three traps, all of which produce confidently wrong numbers:
 
+- **`cpu-check.sh` cannot measure the screens-off state.** It re-execs under
+  `caffeinate -di`, and the `-d` is exactly what prevents display sleep. To check the
+  power gate, run the app with `QUAY_TRACE=1` and use `caffeinate -i` (no `-d`) plus
+  `pmset displaysleepnow` — the trace lines are the evidence, not a CPU sample.
 - **Popover open and closed are different measurements.** The metrics and radar loops
   are visibility-gated; closed, they block on a condvar and do nothing. Always say
   which state a number came from.
@@ -60,12 +64,49 @@ stacks. Reducing it further means running the passes less often, which is what
 `agentIntervalSec` and `metricsIntervalSec` are for. The popover is open for seconds a
 day, so this is the right place to stop.
 
+## The floor is conditional
+
+The always-on loop parks entirely while every display is asleep or the Mac is locked
+(see [architecture](architecture.md#power-gating)). Overnight, with the lid shut, Quay
+does no work at all rather than ~1,200 status passes per hour. There is no knob for
+this and nothing to tune — it is the default.
+
+Verify it rather than assume it:
+
+```sh
+QUAY_TRACE=1 npm run tauri dev
+caffeinate -i -t 120 &     # keep the system awake, let the display sleep
+pmset displaysleepnow
+sleep 12
+caffeinate -u -t 3         # simulate user activity to wake the display back up
+```
+
+Expect five lines. On a Mac set to require a password, display sleep also **locks** the
+session, so the two signals interleave — and the middle of the sequence is the part
+worth reading:
+
+```
+power gate: reconciled     — polling running    startup state, read not assumed
+power gate: screens asleep — polling parked
+power gate: locked         — polling parked
+power gate: screens awake  — polling parked     screens back, but still locked
+power gate: unlocked       — polling running    both clear, so work resumes
+```
+
+The fourth line is the whole point of keeping the two flags independent: the display
+came back before the lock cleared, and polling correctly stayed parked. If your Mac
+does not lock on display sleep you will see three lines instead, which is also correct.
+
+Two honest limits: gating the *next* iteration does not cancel a pass already in
+flight, so what this buys is eventual quiescence rather than an instant stop; and
+resume is bounded by notification delivery, not instantaneous.
+
 ## If you need it lower still
 
 In rough order of effect, all in [configuration](configuration.md):
 
-1. **`pollIntervalSec`** — the only always-on loop. Raising it is the one change that
-   affects battery over a whole day.
+1. **`pollIntervalSec`** — the only always-on loop, and only while a screen is lit.
+   Raising it is the one change that affects battery over a whole day.
 2. **`trackAgents` off** — skips the agent pass outright (no `ps`, no sysinfo, no
    session-file reads) and clears the tray badge.
 3. **`agentIntervalSec` / `metricsIntervalSec`** — popover-open only, so they change

@@ -5,6 +5,8 @@ pub mod detect;
 pub mod docker;
 pub mod health;
 pub mod hooks_install;
+#[cfg(target_os = "macos")]
+pub mod mac_power;
 pub mod metrics;
 pub mod model;
 pub mod scanner;
@@ -29,6 +31,17 @@ use tauri::{
 /// after-the-fact forensics. Reserved for genuine failures; the happy path stays silent.
 fn log_warn(context: &str, detail: impl std::fmt::Display) {
 	eprintln!("[quay] {context}: {detail}");
+}
+
+/// Opt-in trace, for state that is invisible by construction.
+///
+/// The power gate parks the app precisely when nobody is looking at it, so there is
+/// no way to watch it work without being told. Silent unless `QUAY_TRACE` is set,
+/// which keeps [`log_warn`]'s "the happy path stays silent" rule intact.
+fn log_trace(context: &str, detail: impl std::fmt::Display) {
+	if std::env::var_os("QUAY_TRACE").is_some() {
+		eprintln!("[quay] {context}: {detail}");
+	}
 }
 
 #[cfg(target_os = "macos")]
@@ -106,14 +119,27 @@ pub const PRUNE_INTERVAL_SECS: u64 = 60;
 /// while the window is hidden. The single writer — see [`state::AppState::set_visible`].
 fn set_popover_visible(app: &tauri::AppHandle, vis: bool) {
 	app.state::<state::AppState>().set_visible(vis);
-	let _ = app.emit("popover_visibility", vis);
+	emit_render_active(app);
 }
 
-/// Current popover visibility, for the frontend to seed its own state on mount —
-/// a reload while hidden would otherwise miss the event and keep animating.
+/// Tell the frontend whether to animate. The event carries the *derived* state —
+/// popover open **and** someone able to see it — because a popover left open when
+/// the display sleeps would otherwise keep compositing its `animate-pulse` dots at
+/// a dark screen. The frontend only ever uses this to set `html[data-hidden]`, so
+/// the derived value is what it wanted all along; nothing under `src/` changes.
+///
+/// Every writer of the wake state calls this: the popover setter above and the
+/// screen/lock observers in [`mac_power`].
+pub fn emit_render_active(app: &tauri::AppHandle) {
+	let active = app.state::<state::AppState>().is_active();
+	let _ = app.emit("popover_visibility", active);
+}
+
+/// Current render-active state, for the frontend to seed itself on mount — a reload
+/// while hidden would otherwise miss the event and keep animating.
 #[tauri::command]
 fn get_popover_visible(state: tauri::State<state::AppState>) -> bool {
-	state.visible.load(std::sync::atomic::Ordering::Relaxed)
+	state.is_active()
 }
 
 /// Reflect service health *and* waiting agents on the tray. Icon precedence:
@@ -529,6 +555,11 @@ fn show_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 	// Mirror `visible` to the actual outcome of the window op.
 	match win.show() {
 		Ok(()) => {
+			// A click is not evidence about the display, but it is a good moment to
+			// re-read it: if a screen/lock notification was ever missed, this is what
+			// stops a stale flag wedging the always-on loop parked forever.
+			#[cfg(target_os = "macos")]
+			mac_power::reconcile(app);
 			set_popover_visible(app, true);
 			if let Err(e) = win.set_focus() {
 				log_warn("popover focus failed", e);
@@ -756,6 +787,10 @@ pub fn run() {
 			}
 
 			// Start the background status-poll loop.
+			// Before the loops start, so none of them polls at a screen that is
+			// already asleep (a relaunch into a locked Mac, say).
+			#[cfg(target_os = "macos")]
+			mac_power::spawn_observers(app.handle());
 			health::spawn_poll_loop(app.handle().clone());
 
 			// Start the metrics loop (only samples while the popover is visible).

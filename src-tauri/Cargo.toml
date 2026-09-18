@@ -43,5 +43,14 @@ tauri-plugin-updater = "2"
 sysinfo = "0.39"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2-app-kit = "0.3"
-objc2-foundation = "0.3"
+objc2-app-kit = { version = "0.3", features = ["NSWorkspace"] }
+objc2-foundation = { version = "0.3", features = [
+	"NSNotification",
+	"NSDistributedNotificationCenter",
+	"NSString",
+] }
+# Block-based notification observers (`addObserverForName:object:queue:usingBlock:`)
+# and CGSessionCopyCurrentDictionary for the startup lock state. Both already build
+# as dependencies of objc2-foundation; these lines only make them directly usable.
+block2 = "0.6"
+objc2-core-foundation = { version = "0.3", features = ["CFDictionary", "CFNumber"] }

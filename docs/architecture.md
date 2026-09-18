@@ -35,11 +35,12 @@ Each module has a single responsibility:
 | `docker` | Wrap the Docker CLI for container items: daemon lifecycle (`daemon_running`/`start_daemon`/`wait_for_daemon`), image listing for autocomplete (`list_images`), run/reuse a named container (`docker_start`) and stop it (`docker_stop`), container status via `docker ps` (`docker_status`/`parse_docker_ps`), and resource stats via `docker stats` (`stats_raw`/`parse_docker_stats`). See [Docker services](docker-services.md). |
 | `supervisor` | Spawn a background item via `zsh -lc "<cmd>"` in its **own process group** (`setsid`), redirect stdout/stderr to `logs/<id>.log`, and stop it by signalling the group (SIGTERM, escalating to SIGKILL). Also **adopts** orphaned services across app restarts: `adopt` (handle-less, PID-only), `pids_listening`/`parse_lsof_pids` (find listeners via `lsof`), and `stop_port` (free a port by killing its listeners). See [process reattachment](process-reattach.md). |
 | `health` | The pure `decide_status` function (PID liveness × port/HTTP reachability → status), the TCP/HTTP probes, and the background poll loop that emits `status_changed`. |
-| `metrics` | Per-process CPU%/memory sampling via `sysinfo`. A visibility-gated loop (`AppState.visible`) samples only while the popover is open, aggregates each item's whole process tree (pure `aggregate_tree`), and emits `metrics_changed`. See [metrics](metrics.md). |
+| `metrics` | Per-process CPU%/memory sampling via `sysinfo`. A gated loop (`AppState::wait_active`) samples only while the popover is open and a screen is lit, aggregates each item's whole process tree (pure `aggregate_tree`), and emits `metrics_changed`. See [metrics](metrics.md). |
 | `terminal` | Build the shell line and drive Terminal.app / iTerm2 via `osascript` (open a folder, or run a `terminal`-mode item). |
-| `state` | `AppState` — shared mutable state behind `Mutex`es: the loaded config, the map of running children, the status map, and the error map, plus a `suppress_hide` flag and the data dir. |
+| `state` | `AppState` — shared mutable state behind `Mutex`es: the loaded config, the map of running children, the status map, and the error map, plus a `suppress_hide` flag and the data dir. Also `Wake`, the condvar gate all three background loops park on (`awake` = a screen is lit and unlocked; `active` = that plus the popover open). |
+| `mac_power` | macOS only. The app's one observer of system state: `NSWorkspace` screen sleep/wake and `NSDistributedNotificationCenter` lock/unlock, plus the startup reads (`CGDisplayIsAsleep`, `CGSessionCopyCurrentDictionary`) that notifications alone can't supply. Drives `Wake`. See *Power gating*. |
 | `commands` | All `#[tauri::command]` handlers, plus `init_state`. |
-| `lib` | The Tauri builder: registers plugins, sets up the tray + popover + hide-on-blur, manages `AppState`, registers commands, spawns the poll loop, auto-starts flagged items, and installs the quit/exit handler. |
+| `lib` | The Tauri builder: registers plugins, sets up the tray + popover + hide-on-blur, manages `AppState`, registers commands, spawns the poll loop and the power observers, auto-starts flagged items, and installs the quit/exit handler. |
 
 ## Frontend units
 
@@ -70,6 +71,11 @@ Each module has a single responsibility:
 A single background thread runs every `pollIntervalSec`. This is the app's only
 always-on loop — it keeps running with the popover closed, because it drives the tray
 icon and the waiting-agent badge — so its per-pass cost is the app's energy floor.
+
+That floor is **conditional on someone being able to see the tray**. The loop parks on
+the same condvar the other two use (`AppState::wait_awake`) whenever every display is
+asleep or the Mac is locked, because the icon and badge it maintains are on no screen
+in either state. See *Power gating* below.
 `brew services list` and `docker ps -a` are therefore spawned **once per pass**, not
 once per item, and parsed into a map the item loop looks up (the same batching
 `metrics::collect` does for `launchctl`/`lsof`). Each pass:
@@ -85,11 +91,42 @@ The poll loop deliberately releases the `running` lock before doing the (blockin
 
 ### Metrics sampling
 
-A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState.visible`, which `lib.rs` flips on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it blocks on a condvar (`AppState::wait_visible`) rather than idle-ticking, so a closed popover costs zero wakeups and an open is picked up immediately. The interval between samples is a condvar wait too, carrying the visibility *generation* the pass started with — a hide→show that happens during a collection would otherwise notify a condvar nobody was waiting on and be slept through.
+A second background thread (`metrics::spawn_metrics_loop`) samples per-process CPU% and memory, but **only while the popover is visible** — gated on `AppState::wait_active` — the popover open **and** a screen to show it on. `lib.rs` flips visibility on successful window show/hide (and on genuine hide-on-blur, but not while a native dialog suppresses hiding). While hidden it blocks on a condvar rather than idle-ticking, so a closed popover costs zero wakeups and an open is picked up immediately. The awake term matters independently: display sleep does not defocus a window, so without it a popover left open would keep sampling at a dark screen. The interval between samples is a condvar wait too, carrying the visibility *generation* the pass started with — a hide→show that happens during a collection would otherwise notify a condvar nobody was waiting on and be slept through.
 
 Each pass resolves root PIDs per running item (the tracked child PID, plus any port listeners via `pids_listening` — covering terminal/brew items and reparented servers), takes two `sysinfo` refreshes 200 ms apart so CPU% is a valid delta (cpu+memory only — the tree walk needs every process's parent, but not its argv, environ, cwd or disk I/O), then sums each item's whole process tree with the pure `aggregate_tree` helper. Docker items are the exception: their CPU/memory come from `docker stats` (`docker::collect_docker`) rather than the host process tree, since the container runs under the Docker VM. The result is pushed as a full snapshot via `metrics_changed`; the frontend replaces its map wholesale so stopped items drop out. See [metrics](metrics.md).
 
 ### Popover placement
+
+### Power gating
+
+`mac_power` (macOS only) is the app's only observer of system state. It watches four
+notifications and ands them into `Wake`:
+
+| Centre | Notification | Flag |
+|---|---|---|
+| `NSWorkspace` notification centre | `NSWorkspaceScreensDidSleep` / `…DidWake` | `screens_asleep` |
+| `NSDistributedNotificationCenter` | `com.apple.screenIsLocked` / `…IsUnlocked` | `locked` |
+
+`Wake::awake()` is `!screens_asleep && !locked`; `Wake::active()` adds `visible`. The
+health loop waits on the first, metrics and radar on the second.
+
+Three details that are easy to get wrong:
+
+- **`ScreensDidSleep` fires only when *every* attached display sleeps**, which is the
+  question being asked. A closed lid with an external display still lit does not fire
+  it — correctly, since the menubar is visible over there.
+- **Notifications only report changes**, so the current state has to be read once at
+  startup (`CGDisplayIsAsleep`, `CGSessionCopyCurrentDictionary`). Without that, a
+  launch or an updater relaunch into a locked Mac would poll at a lock screen forever.
+  `show_popover` re-reads them too, so a missed notification can't wedge the app idle.
+- **Gating the next iteration does not cancel a pass already in flight.** What this
+  buys is eventual quiescence, not an instant stop.
+
+System sleep needs no observer: the CPU is stopped and the threads are parked anyway,
+and `ScreensDidWake` covers the resume.
+
+Set `QUAY_TRACE=1` to print each transition — the gate parks the app precisely when
+nobody is looking, so there is otherwise no way to watch it work.
 
 On macOS the popover is positioned entirely in **AppKit coordinates** (`lib.rs`: `pin_under_tray`, `mac_screen_geometry`). Tauri's physical monitor origins/sizes (and the positioner plugin's `TrayCenter`, which builds on them) are inconsistent on mixed-DPI desktops — vertically stacked 1x + 2x displays in particular — and mixing them with AppKit window coordinates picked the wrong display or stranded the window off-screen (issue #5; upstream tauri-apps/tauri#7890, plugins-workspace#724).
 

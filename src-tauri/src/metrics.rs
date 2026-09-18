@@ -1,7 +1,7 @@
 //! Per-process CPU% and memory sampling, gated on popover visibility.
 //!
 //! Unlike the always-on health poll ([`crate::health`]), this loop only does work
-//! while the popover is open (`AppState.visible`). Each pass takes a self-contained
+//! while the popover is open and visible (`AppState::wait_active`). Each pass takes a self-contained
 //! pair of `sysinfo` refreshes 200 ms apart so CPU% is a valid instantaneous delta,
 //! then aggregates each service's whole process tree (root PIDs + descendants) so
 //! wrapper processes (e.g. `npm` → `node`) report the real consumption.
@@ -12,7 +12,6 @@ use crate::state::AppState;
 use crate::supervisor;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 use sysinfo::{MINIMUM_CPU_UPDATE_INTERVAL, ProcessRefreshKind, ProcessesToUpdate, System};
 use tauri::{AppHandle, Emitter, Manager};
@@ -262,11 +261,11 @@ pub fn parse_mem_size(s: &str) -> u64 {
 pub fn spawn_metrics_loop(app: AppHandle) {
 	std::thread::spawn(move || {
 		loop {
-			let generation = app.state::<AppState>().wait_visible();
+			let generation = app.state::<AppState>().wait_active();
 			let metrics = collect(&app);
 			// Re-check after the (~200 ms + lsof) collection: the popover may have
 			// closed meanwhile, in which case skip the emit.
-			if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+			if app.state::<AppState>().is_active() {
 				let _ = app.emit("metrics_changed", &metrics);
 			}
 			let interval = app

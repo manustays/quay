@@ -11,7 +11,6 @@ use crate::state::AppState;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use sysinfo::{Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
 use tauri::{AppHandle, Emitter, Manager};
@@ -244,7 +243,7 @@ pub fn spawn_scan_loop(app: AppHandle) {
 		let mut next_port = Instant::now();
 		let mut next_agent = Instant::now();
 		loop {
-			let generation = app.state::<AppState>().wait_visible();
+			let generation = app.state::<AppState>().wait_active();
 			if generation != generation_seen {
 				generation_seen = generation;
 				next_port = Instant::now();
@@ -257,7 +256,7 @@ pub fn spawn_scan_loop(app: AppHandle) {
 			}
 			if Instant::now() >= next_port {
 				let discovered = scan(&app, &mut cache);
-				if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+				if app.state::<AppState>().is_active() {
 					let _ = app.emit("ports_discovered", &discovered);
 				}
 				next_port = Instant::now() + PORT_INTERVAL;
@@ -283,7 +282,7 @@ pub fn spawn_scan_loop(app: AppHandle) {
 				// scan just stamped live PIDs and reconciled resumed waiting files;
 				// recompute the badge now so it matches the rows the moment they emit.
 				crate::refresh_waiting_badge(&app, true);
-				if app.state::<AppState>().visible.load(Ordering::Relaxed) {
+				if app.state::<AppState>().is_active() {
 					let _ = app.emit("agents_discovered", &agents);
 				}
 				next_agent = Instant::now() + agent_interval;
