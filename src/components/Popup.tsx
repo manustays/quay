@@ -28,6 +28,9 @@ interface PopupProps {
 	discovered: DiscoveredPort[];
 	/** Terminal agent sessions found by the agent radar. */
 	agents: DiscoveredAgent[];
+	/** Agent tracking is on, but no agent has its hooks installed — so the radar has
+	 *  nothing to discover and the section explains itself instead of vanishing. */
+	agentsUnconfigured: boolean;
 	/** When true, hide detected listeners with no recognized dev stack. */
 	radarDevOnly: boolean;
 	onChange: () => void;
@@ -96,6 +99,7 @@ export function Popup({
 	metrics,
 	discovered,
 	agents,
+	agentsUnconfigured,
 	radarDevOnly,
 	onChange,
 	onAdd,
@@ -373,6 +377,27 @@ export function Popup({
 							? favorites.map((item, i) => renderRow(item, i, 'fav', i))
 							: renderClusters(favParts, 'fav-grp:', 'fav', 0)}
 					</>
+				)}
+
+				{/* Sessions are discovered from the agents' own hooks, so with none
+				    installed there is nothing to list. Say that, with the way to fix
+				    it, rather than rendering nothing and looking broken. */}
+				{query === '' && agents.length === 0 && agentsUnconfigured && (
+					<div className="mt-0.5 px-2 py-1.5">
+						<p className="font-heading text-[10px] font-semibold tracking-wider text-muted-foreground uppercase">
+							Agents
+						</p>
+						<p className="mt-1 text-xs text-muted-foreground">
+							Agent sessions appear here once you install their hooks.
+						</p>
+						<button
+							type="button"
+							onClick={onSettings}
+							className="mt-1.5 rounded-md bg-foreground/[0.06] px-2 py-1 text-xs font-medium transition-colors hover:bg-foreground/[0.1]"
+						>
+							Install agent hooks…
+						</button>
+					</div>
 				)}
 
 				{/* Terminal agent sessions found by the agent radar; same-folder
