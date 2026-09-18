@@ -170,7 +170,7 @@ export function SettingsDialog({ open, onOpenChange, onSaved }: SettingsDialogPr
 						<div className="grid gap-1.5">
 							<Label className="gap-1.5 text-xs text-muted-foreground">
 								Agent interval (sec)
-								<InfoHint text="How often AI coding agent sessions are re-scanned. Only while this window is open — the menubar waiting badge updates on the poll interval instead." />
+								<InfoHint text="How often the agent session list is rebuilt. Only while this window is open — the menubar waiting badge updates on the poll interval instead. A pass is cheap now, so raising this saves little." />
 							</Label>
 							<Input
 								type="number"

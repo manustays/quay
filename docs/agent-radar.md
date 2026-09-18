@@ -89,51 +89,34 @@ pulls attention even when the popover is shut. Icon precedence puts a service `E
 above waiting; waiting above `Starting`. The count dedups by `(agent, cwd)` and honors
 `ignored_agents`.
 
-**Keeping the badge honest.** The badge and the in-popover dots read the same files
-but the dots apply corrections the raw count used to miss, so a stale `waiting` file
-could badge the tray with no matching row. Two mechanisms now keep them in step:
+**Keeping the badge honest.** The badge and the in-popover dots read the same files,
+and now agree by construction: both key on the session's own `(pid, startedAt)`, so a
+file whose process is gone stops counting immediately and stops being rendered in the
+same pass. There is no reconciliation step and no grace window for a file that names
+its own process — the pair either still exists or it does not.
 
-- **Resume reconcile.** When a popover-open scan sees a session the resume backstop
-  downgraded off `waiting` (its log advanced past the waiting event), it *deletes*
-  that stale `waiting` file (`clear_resumed_waiting`), so the badge stops counting
-  what the rows already hide. It only removes a `waiting` event whose own `ts`
-  predates the resume evidence, so a sibling session still genuinely waiting in the
-  same folder (newer event) is preserved.
-- **PID liveness.** Each scan stamps the live PIDs it resolved per `(agent, cwd)`
-  into `last_agent_pids`; `waiting_count` drops a waiting key whose every stamped PID
-  is dead (`kill(pid, 0)`) — a *crashed-while-waiting* session clears without waiting
-  for the 10-minute dead-session prune.
-- **Orphan sweep.** A `waiting` file whose session died *unscanned* has no stamped
-  PID to test, so it is swept by comparing the state dir against live sessions
-  (`prune_orphan_hook_states` + `live_agent_keys`). That enumeration forks `ps`, and
-  "an agent is waiting on you" is a steady state, not a rare one — so on the always-on
-  poll loop it is rate-limited to once a minute (`PRUNE_INTERVAL_SECS`), while the
-  popover-open path runs it unconditionally on every open and every agent pass. A
-  phantom badge therefore clears within ~a minute in the background, or instantly the
-  moment you open Quay.
+Files written by an older helper carry no identity. Those keep the previous behaviour:
+counted by the badge, swept by `prune_orphan_hook_states` once their `(agent, cwd)` has
+no live session and the 10-minute grace has passed. They are rewritten with an identity
+on the session's next hook event.
 
-Remaining ceilings: PIDs are keyed by `(agent, cwd)`, so a dead waiting session
-sharing a folder with a live sibling still badges until the next popover-open scan;
-`last_agent_pids` is empty after an app restart until the first scan, so a crash then
-reverts to prune-only behavior; and a recycled PID can read alive. All self-heal on a
-popover-open scan.
+All three ceilings this section used to list are gone: sessions are keyed per session
+rather than per `(agent, cwd)`, so a dead one no longer badges on a live sibling's
+behalf; nothing depends on state accumulated since app start, so a crash-and-restart
+behaves like any other moment; and a recycled PID is caught by the start time rather
+than read as alive.
 
-There are two sources for the state, and the better one wins:
+Hooks are the only source of state, and they are authoritative. The agent reports its
+own lifecycle, so working/waiting/idle are exact — including "waiting at a permission
+prompt", which a process scan cannot see at all.
 
-1. **Hooks (authoritative).** With the radar hooks installed for an agent (one
-   click in Settings — below), the agent reports its own lifecycle, so
-   working/waiting/idle are exact — including "waiting at a permission prompt",
-   which `ps` alone cannot see.
-2. **Heuristic (fallback).** Without hooks, "working" is a **recent-activity
-   signal, not proof of work**: a session-log write < 20 s ago **or** the
-   process using > 10 % CPU; anything else is idle. There is no "waiting"
-   without hooks — a permission prompt reads as idle. Per agent:
-   - **Claude Code**: newest `.jsonl` mtime in `~/.claude/projects/<cwd-slug>/`.
-   - **Codex**: newest matching `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-     (by mtime across all date dirs, so sessions started days ago still match).
-   - **Pi**: newest `.jsonl` under `~/.pi/agent/sessions/<cwd-slug>/` (slug
-     inferred from one machine — best effort).
-   - **OpenCode**: CPU only (sessions live in sqlite).
+There used to be a second source: a heuristic that guessed from session-log mtimes and
+CPU use when hooks were not installed. It is gone, along with the readers for
+`~/.claude/projects`, `~/.codex/sessions` and `~/.pi/agent/sessions`. It never produced
+a `waiting` state (a permission prompt read as idle), it could only ever be a
+recent-activity signal rather than proof of work, and reading another app's files to
+produce a guess is what triggers the macOS "access data from other apps" prompt. An
+agent without hooks is now simply not discovered, and the popover says so.
 
 ## Installing the hooks (Settings → Agent radar hooks)
 
@@ -207,12 +190,12 @@ How the radar consumes it: `quay-hook` writes one small JSON file per session
 (`{ agent, cwd, state, ts }`, plus `name`, `pid`, `startedAt` and `tty` when known) under
 `~/Library/Application Support/am.abhi.quay/agent-state/`, keyed by session and
 tagged with the agent so two agents sharing a folder don't collide. The always-on poll
-reads them (`pollIntervalSec`, independent of `agentIntervalSec`). It trusts **waiting** outright and a **fresh working** (event
-within 5 min); a session-log write newer than a waiting event overrides it (the
-session resumed), a stale working falls back to the heuristic, dead-session
-files are pruned after a 10-minute grace, and corrupt/partial files are dropped
-on read. Writes are atomic (temp + rename), so a mid-write poll never reads
-half a file.
+reads them (`pollIntervalSec`, independent of `agentIntervalSec`). The badge counts
+`waiting` files whose process is still alive; it applies none of the corrections the
+popover rows do, because there are none left to apply — `resolve_state`'s only
+remaining rule is that a `working` older than 5 minutes with no clearing event reads
+idle. Corrupt or partial files are dropped on read. Writes are atomic (temp + rename),
+so a mid-write poll never reads half a file.
 
 ### Process identity in the state file
 
