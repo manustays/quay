@@ -51,16 +51,37 @@ const CLAUDE_SPECS: &[HookSpec] = &[
 	HookSpec { event: "SessionEnd", matcher: None, state: "ended" },
 ];
 
-/// Codex (`~/.codex/hooks.json`). No SessionEnd event — the radar's dead-cwd
-/// prune reclaims stale files instead.
-// ponytail: Codex PermissionRequest hooks can allow/deny; quay-hook exits 0
-// with no stdout, which must read as "decline to decide" so the normal approval
-// prompt still shows. Verify live; if not, drop this waiting mapping.
+/// Which `SessionStart` sources mean "a session now exists and is waiting for you".
+///
+/// `compact` is deliberately **excluded**: Codex runs `SessionStart` hooks matching
+/// `source: "compact"` after it auto-compacts, *before the next model request* — i.e.
+/// in the middle of a turn. Mapping that to idle would blank a working row exactly
+/// when the agent is busiest. `clear` is excluded for the same reason it isn't
+/// needed: `Stop` has already marked the session idle by then.
+const CODEX_SESSION_OPENED: &str = "startup|resume";
+
+/// Codex (`~/.codex/hooks.json`).
+///
+/// `SessionStart` is what makes a session visible before it does anything — without
+/// it a session that opens and sits idle never emits an event, so nothing knows it
+/// exists. `SessionEnd` deletes the state file on close; Codex also fires it after
+/// 30 minutes of inactivity, which is why a still-running CLI can lose its hook state
+/// and fall back to the radar's own view of the process.
+///
+/// `SessionEnd` takes no matcher on purpose: `reason` is always `other` today, and
+/// omitting it keeps us catching any reason Codex adds later.
+///
+/// A `PermissionRequest` hook can return an allow/deny decision, and this helper
+/// exits 0 with empty stdout. Codex documents that as falling through to the normal
+/// approval flow, so the prompt still shows — the mapping only observes, it never
+/// decides.
 const CODEX_SPECS: &[HookSpec] = &[
+	HookSpec { event: "SessionStart", matcher: Some(CODEX_SESSION_OPENED), state: "idle" },
 	HookSpec { event: "UserPromptSubmit", matcher: None, state: "working" },
 	HookSpec { event: "PostToolUse", matcher: Some(""), state: "working" },
 	HookSpec { event: "PermissionRequest", matcher: Some(""), state: "waiting" },
 	HookSpec { event: "Stop", matcher: None, state: "idle" },
+	HookSpec { event: "SessionEnd", matcher: None, state: "ended" },
 ];
 
 /// Per-agent install state for the Settings pane. Mirrors the TS `HookStatus`.
@@ -521,6 +542,50 @@ mod tests {
 		std::fs::create_dir_all(&data).unwrap();
 		assert!(refresh_installed(&d, &data).is_empty());
 		assert!(!d.join(".claude/settings.json").exists());
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn codex_session_start_ignores_mid_turn_compaction() {
+		// Codex runs SessionStart hooks matching source "compact" after it
+		// auto-compacts, before the next model request — mid-turn. Matching it would
+		// mark a busy session idle, the same bug pi had with agent_end.
+		let d = tmp();
+		let cfg = d.join(".codex/hooks.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let helper = PathBuf::from("/tmp/quay-hook");
+		install_json_hooks(&cfg, &helper, "codex", CODEX_SPECS).unwrap();
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		let start = v["hooks"]["SessionStart"].as_array().unwrap();
+		assert_eq!(start.len(), 1);
+		let matcher = start[0]["matcher"].as_str().expect("SessionStart must be filtered");
+		assert!(matcher.contains("startup"), "a fresh session must become visible");
+		assert!(matcher.contains("resume"), "a resumed session must become visible");
+		assert!(!matcher.contains("compact"), "compaction happens mid-turn, not at rest");
+
+		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn codex_session_end_clears_state_and_matches_every_reason() {
+		// The old spec had no SessionEnd at all — on the false premise that Codex
+		// lacks the event — so every closed session leaked its state file until the
+		// orphan sweep noticed. `reason` is always "other" today; omitting the
+		// matcher keeps us catching whatever Codex adds later.
+		let d = tmp();
+		let cfg = d.join(".codex/hooks.json");
+		std::fs::create_dir_all(cfg.parent().unwrap()).unwrap();
+		let helper = PathBuf::from("/tmp/quay-hook");
+		install_json_hooks(&cfg, &helper, "codex", CODEX_SPECS).unwrap();
+
+		let v: Value = serde_json::from_str(&std::fs::read_to_string(&cfg).unwrap()).unwrap();
+		let end = v["hooks"]["SessionEnd"].as_array().unwrap();
+		assert_eq!(end.len(), 1);
+		assert!(end[0].get("matcher").is_none(), "SessionEnd must match every reason");
+		let command = end[0]["hooks"][0]["command"].as_str().unwrap();
+		assert!(command.contains("ended codex"), "SessionEnd must clear the state file");
+
 		std::fs::remove_dir_all(&d).ok();
 	}
 }

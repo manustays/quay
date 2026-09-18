@@ -149,7 +149,7 @@ Each agent's config and event mapping:
 | Agent | Config Quay writes | Events → state | Waiting? |
 |---|---|---|---|
 | **Claude Code** | `~/.claude/settings.json` | UserPromptSubmit/PostToolUse → working · Notification *(filtered)* → waiting · Stop → idle · SessionEnd → ended | yes |
-| **Codex** | `~/.codex/hooks.json` | UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle | yes |
+| **Codex** | `~/.codex/hooks.json` | SessionStart *(startup/resume)* → idle · UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle · SessionEnd → ended | yes |
 | **OpenCode** | `~/.config/opencode/plugin/quay.js` | permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
 | **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_settled → idle | no (no built-in permission prompt) |
 
@@ -159,6 +159,14 @@ fires for `auth_success`, `quota_auto_resume_fired` and the `elicitation_complet
 waiting agent — an amber row and a tray badge for a session that wanted nothing.
 `idle_prompt` is excluded too: it nudges about a session `Stop` has already marked
 idle, so counting it would badge every finished session a minute after it finished.
+
+Codex's `SessionStart` is filtered to **`startup|resume`**. Codex runs `SessionStart`
+hooks matching `source: "compact"` after auto-compaction, *before the next model
+request* — mid-turn — so matching it would blank a working row exactly when the agent
+is busiest. Its `SessionEnd` carries no matcher: `reason` is always `other` today, and
+omitting it keeps catching whatever Codex adds later. Note that Codex also fires
+`SessionEnd` after 30 minutes of inactivity, so a still-running CLI can lose its hook
+state and fall back to the radar's own view of the process.
 
 Pi reports idle on **`agent_settled`, not `agent_end`** — a run can end and then be
 continued by pi's own retries, compaction or follow-ups, so `agent_end` flashed the row
