@@ -36,12 +36,15 @@ export function MetricsText({
 	metrics,
 	className,
 }: {
-	metrics: { cpuPercent: number; memoryBytes: number; uptimeSec: number | null };
+	/** `cpuPercent` is omitted for agent rows: sampling it costs a second process
+	 *  refresh and a 200 ms stall, which is not worth a number on a hidden popover. */
+	metrics: { cpuPercent?: number; memoryBytes: number; uptimeSec: number | null };
 	className?: string;
 }): React.JSX.Element {
 	return (
 		<span className={cn('tabular-nums', className)}>
-			{metrics.cpuPercent.toFixed(0)}% · {formatBytes(metrics.memoryBytes)}
+			{metrics.cpuPercent != null && `${metrics.cpuPercent.toFixed(0)}% · `}
+			{formatBytes(metrics.memoryBytes)}
 			{metrics.uptimeSec != null && ` · ${formatUptime(metrics.uptimeSec)}`}
 		</span>
 	);

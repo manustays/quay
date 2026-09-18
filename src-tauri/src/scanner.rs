@@ -235,7 +235,6 @@ pub fn spawn_scan_loop(app: AppHandle) {
 	std::thread::spawn(move || {
 		let mut cache: HashMap<u32, Resolved> = HashMap::new();
 		// Session names, codex rollout metas and the codex index, cached across passes.
-		let mut caches = crate::agent_radar::ScanCaches::default();
 		// The visibility generation the current deadlines were set against. A change
 		// means the popover was reopened, so both radars are due immediately rather
 		// than at a deadline computed before the user last closed it.
@@ -278,7 +277,7 @@ pub fn spawn_scan_loop(app: AppHandle) {
 				// next tick instead of waiting out an interval that never ran.
 				next_agent = Instant::now();
 			} else if Instant::now() >= next_agent {
-				let agents = crate::agent_radar::scan(&app, &mut caches);
+				let agents = crate::agent_radar::scan(&app);
 				// scan just stamped live PIDs and reconciled resumed waiting files;
 				// recompute the badge now so it matches the rows the moment they emit.
 				crate::refresh_waiting_badge(&app, true);

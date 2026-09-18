@@ -119,13 +119,12 @@ export interface DiscoveredAgent {
 	/** Best-effort session label (claude: first prompt; codex: thread name). cwd-keyed. */
 	sessionName: string | null;
 	uptimeSec: number;
-	cpuPercent: number;
 	memoryBytes: number;
 	/**
-	 * "waiting" = hook-reported, session blocked on the user; "working" =
-	 * hook-reported turn in progress, or (with no hooks installed) a recent
-	 * session-log write / busy CPU — then a recent-activity signal, not proof
-	 * of work; "idle" otherwise.
+	 * "waiting" = session blocked on you; "working" = a turn is in progress;
+	 * "idle" otherwise. All three are reported by the agent's own hooks, so they
+	 * are exact rather than inferred — a session with no hooks installed is not
+	 * discovered at all.
 	 */
 	state: 'working' | 'idle' | 'waiting';
 	/** Controlling tty (e.g. "ttys002") — jump-to-session's window lookup key. */
@@ -361,14 +360,19 @@ export function aggregateGroupStatus(statuses: Status[]): GroupStatus {
 /**
  * Aggregate member metrics for a group row: summed CPU% and memory, max
  * uptime. Returns null when no member has metrics (nothing running).
+ *
+ * `cpuPercent` is optional because agent rows do not carry one — sampling it needs
+ * a second process refresh and a 200 ms stall. It is omitted from the result when no
+ * member reported one, rather than summed to a misleading 0%.
  */
 export function aggregateGroupMetrics(
-	list: ItemMetrics[],
-): { cpuPercent: number; memoryBytes: number; uptimeSec: number | null } | null {
+	list: Array<Omit<ItemMetrics, 'cpuPercent'> & { cpuPercent?: number }>,
+): { cpuPercent?: number; memoryBytes: number; uptimeSec: number | null } | null {
 	if (list.length === 0) return null;
 	const uptimes = list.map((m) => m.uptimeSec).filter((u): u is number => u != null);
+	const cpus = list.map((m) => m.cpuPercent).filter((c): c is number => c != null);
 	return {
-		cpuPercent: list.reduce((sum, m) => sum + m.cpuPercent, 0),
+		...(cpus.length > 0 ? { cpuPercent: cpus.reduce((sum, c) => sum + c, 0) } : {}),
 		memoryBytes: list.reduce((sum, m) => sum + m.memoryBytes, 0),
 		uptimeSec: uptimes.length > 0 ? Math.max(...uptimes) : null,
 	};

@@ -473,7 +473,7 @@ function GroupRow({
 	name: string;
 	count: number;
 	status: GroupStatus;
-	metrics: { cpuPercent: number; memoryBytes: number; uptimeSec: number | null } | null;
+	metrics: { cpuPercent?: number; memoryBytes: number; uptimeSec: number | null } | null;
 	onStart: () => void;
 	onStop: () => void;
 	children: React.ReactNode;

@@ -57,6 +57,11 @@ would otherwise composite forever).
 batching the per-item `brew`/`docker` forks in the always-on poll loop, rate-limiting
 the `ps`-forking orphan sweep, and replacing two 500 ms idle ticks with condvar waits.
 
+Since then the agent pass has been rebuilt on hook state files: per pass it no longer
+forks `ps`, no longer refreshes `sysinfo` over every tty-attached process twice, and no
+longer sleeps 200 ms to get a CPU delta it then displayed. Re-measure before quoting a
+number — the figures below predate it.
+
 **Open-state cost is unchanged**, and a 40 s `sample` profile shows why nothing obvious
 is left: every thread is parked in a kernel wait, and the real cost is the `lsof`/`ps`
 forks, which land as system time in short-lived children rather than in Quay's own

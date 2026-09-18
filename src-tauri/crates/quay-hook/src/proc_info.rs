@@ -123,6 +123,26 @@ pub fn is_agent_exe(exe: &str, agent: &str) -> bool {
 /// agent is usually the grandparent; the rest is slack for wrappers.
 const MAX_HOPS: usize = 8;
 
+/// Executable paths of `pid` and its ancestors, nearest first.
+///
+/// The fork-free replacement for walking a `ps` snapshot's parent chain. The radar
+/// uses it to spot a host terminal it can focus by tty (Terminal.app, iTerm) — those
+/// expose no environment variable identifying themselves, so ancestry is the only
+/// way to recognise them.
+pub fn ancestor_exes(pid: u32, max_hops: usize) -> Vec<String> {
+	let mut out = Vec::new();
+	let mut current = pid;
+	for _ in 0..max_hops {
+		let Some(proc_) = info(current) else { break };
+		out.push(proc_.exe);
+		if proc_.ppid <= 1 {
+			break;
+		}
+		current = proc_.ppid;
+	}
+	out
+}
+
 /// Walk up from `start` looking for the process running `agent`.
 ///
 /// Deliberately returns `None` rather than guessing. Stamping the wrong pid is worse
@@ -207,5 +227,19 @@ mod tests {
 		assert!(!is_same_process(me, 0));
 		// A pid nothing is using reads as gone rather than as a match.
 		assert!(!is_same_process(4_000_000_000, started));
+	}
+
+	#[test]
+	fn ancestors_are_listed_nearest_first_and_are_bounded() {
+		let chain = ancestor_exes(std::process::id(), 8);
+		assert!(!chain.is_empty(), "our own executable at minimum");
+		assert!(chain.len() <= 8, "the hop limit is what stops a cyclic table looping");
+		assert!(
+			chain[0].contains("quay") || chain[0].contains("proc_info"),
+			"nearest first — got {}",
+			chain[0]
+		);
+		// The test binary is not launched by launchd directly, so there is a parent.
+		assert!(chain.len() >= 2, "a test process has at least one ancestor");
 	}
 }

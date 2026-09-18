@@ -1,6 +1,6 @@
 use crate::model::{AppConfig, Status, UpdateInfo};
 use crate::supervisor::Running;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -67,12 +67,6 @@ pub struct AppState {
 	/// the menubar reflects waiting agents even while the popover is closed. Read by
 	/// `update_tray_icon` to pick the waiting glyph and the title-badge count.
 	pub waiting_count: AtomicUsize,
-	/// Live PIDs the radar last saw per `(agent, cwd)`, stamped by `agent_radar::scan`
-	/// (popover-open only). The always-on badge path (`waiting_count`) consults this to
-	/// drop a waiting file whose every seen PID is now dead — a crashed-while-waiting
-	/// session — without doing its own `ps`. A key absent here was never scanned, so it
-	/// still counts (fallback). Cleared on restart; repopulated on the next scan.
-	pub last_agent_pids: Mutex<HashMap<(String, String), HashSet<u32>>>,
 	/// The real state behind `active`, under a lock so the gated loops can block on
 	/// a condvar instead of idle-ticking. Writers must go through the setters below.
 	pub wake: (Mutex<Wake>, Condvar),

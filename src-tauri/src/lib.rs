@@ -214,10 +214,7 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle, force_prune: bool) {
 		return;
 	}
 	let dir = st.dir.join("agent-state");
-	let count = {
-		let pids = st.last_agent_pids.lock().unwrap().clone();
-		agent_radar::waiting_count(&dir, &ignored, &pids)
-	};
+	let count = agent_radar::waiting_count(&dir, &ignored);
 	// A phantom count — a `waiting` file whose session died without a clearing
 	// hook — otherwise self-heals only on a popover scan. When the badge would
 	// show, sweep orphaned waiting files (crashed/exited: no live process, event
@@ -233,8 +230,7 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle, force_prune: bool) {
 			|| agent_radar::live_agent_keys(&ignored),
 			std::time::SystemTime::now(),
 		);
-		let pids = st.last_agent_pids.lock().unwrap().clone();
-		agent_radar::waiting_count(&dir, &ignored, &pids)
+		agent_radar::waiting_count(&dir, &ignored)
 	} else {
 		count
 	};

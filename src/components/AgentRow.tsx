@@ -71,7 +71,6 @@ export function AgentRow({ entry, onDismiss }: AgentRowProps): React.JSX.Element
 				<span className="flex items-center gap-1.5 truncate font-mono text-[11px] leading-tight text-muted-foreground">
 					<MetricsText
 						metrics={{
-							cpuPercent: entry.cpuPercent,
 							memoryBytes: entry.memoryBytes,
 							uptimeSec: entry.uptimeSec,
 						}}
@@ -145,7 +144,6 @@ export function AgentFolderRow({
 	const metrics = aggregateGroupMetrics(
 		folder.agents.map((a) => ({
 			id: String(a.pid),
-			cpuPercent: a.cpuPercent,
 			memoryBytes: a.memoryBytes,
 			uptimeSec: a.uptimeSec,
 		})),

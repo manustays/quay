@@ -240,7 +240,39 @@ would vanish from the radar.
 
 All four fields are optional, so a file written by an older helper still parses.
 
-**What consumes them.** The always-on badge path uses `(pid, startedAt)` directly:
+**What consumes them.** Discovery itself, and the always-on badge path.
+
+### Discovery is the set of live state files
+
+A session exists because its agent said so. Each pass:
+
+1. Read `agent-state/*.json`. Delete any whose `(pid, startedAt)` is no longer that
+   process, and any that will not parse.
+2. One `sysinfo` refresh over exactly those pids, for memory and run time.
+3. Build one row **per file** — per session, not per `(agent, cwd)`.
+
+What that removed, per pass: the `ps` fork, a `sysinfo` refresh over every
+tty-attached process on the machine, a second refresh over the candidates, and the
+fixed **200 ms sleep** between them that existed solely so `cpu_usage()` had a delta to
+measure. Also gone: the readers for `~/.claude/projects`, `~/.codex/sessions` and
+`~/.pi/agent/sessions`, and the mtime/CPU heuristic they fed — every session here is
+hooked by definition, so there is no second opinion left to form.
+
+Two consequences worth stating plainly:
+
+- **Sessions are per-session now.** Two Claude sessions in one folder get their own
+  rows, where `(agent, cwd)` keying used to collapse them into one.
+- **An agent with no hooks installed is not discovered at all.** That is the trade the
+  rest of this is built on.
+
+Known gaps, both accepted rather than worked around:
+
+- Codex fires `SessionEnd` after 30 idle minutes even though the CLI is still running,
+  so an untouched Codex session disappears until you type something.
+- OpenCode has no event for a turn that only thinks and never calls a tool, so a short
+  reply reads idle until `session.idle` lands a moment later.
+
+**Liveness on the badge path** uses `(pid, startedAt)` the same way:
 liveness stops being a guess, so a crashed session clears immediately instead of
 sitting out the 10-minute grace, and the `ps` fork that grace existed to avoid is not
 run at all. It is still run, lazily, if a file from an older helper turns up — the
