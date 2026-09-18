@@ -150,8 +150,8 @@ Each agent's config and event mapping:
 |---|---|---|---|
 | **Claude Code** | `~/.claude/settings.json` | SessionStart *(startup/resume/clear/fork)* → idle · UserPromptSubmit/PostToolUse/PostToolUseFailure → working · Notification *(filtered)* → waiting · Stop → idle · SessionEnd → ended | yes |
 | **Codex** | `~/.codex/hooks.json` | SessionStart *(startup/resume/clear)* → idle · UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle · SessionEnd → ended | yes |
-| **OpenCode** | `~/.config/opencode/plugin/quay.js` | permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
-| **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_settled → idle | no (no built-in permission prompt) |
+| **OpenCode** | `~/.config/opencode/plugin/quay.js` | session.created → idle · tool.execute.before/permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
+| **Pi** | `~/.pi/agent/extensions/quay.ts` | session_start → idle · agent_start → working · ui_prompt_start → waiting · agent_settled → idle · session_shutdown → ended | yes (any blocking UI prompt) |
 
 **The `Notification` matcher is not optional.** `Notification` is a catch-all that also
 fires for `auth_success`, `quota_auto_resume_fired` and the `elicitation_complete`
@@ -172,7 +172,19 @@ new id — and a session id the radar has never seen is one it does not know exi
 
 `PostToolUseFailure` carries the same `working` signal as `PostToolUse`, which fires
 only on success; without it a session whose tool call errored looked stale until its
-next successful call. Its `SessionEnd` carries no matcher: `reason` is always `other` today, and
+next successful call.
+
+**Pi does have a waiting state after all.** It has no built-in permission prompt — that
+much of the old note was right — but `ui_prompt_start`/`ui_prompt_end` bracket any
+blocking prompt an extension raises (`confirm`, `select`, `input`, `editor`), which is
+exactly "blocked on a question". Where `ui_prompt_end` returns to is decided by
+`ctx.isIdle()`, since a prompt can be raised mid-run or at rest.
+
+**OpenCode's working signal is `tool.execute.before`.** It is bounded — once per tool
+call, like Claude's `PostToolUse` — where `message.updated` fires on every stream chunk
+and would spawn the helper continuously. It does not cover a turn that only thinks and
+never calls a tool, so a short reply can still read idle until `session.idle` confirms
+it. That narrows the CPU-heuristic dependency rather than removing it outright. Its `SessionEnd` carries no matcher: `reason` is always `other` today, and
 omitting it keeps catching whatever Codex adds later. Note that Codex also fires
 `SessionEnd` after 30 minutes of inactivity, so a still-running CLI can lose its hook
 state and fall back to the radar's own view of the process.

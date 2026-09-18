@@ -3,8 +3,19 @@
 // shelling out to the app-managed quay-hook helper (which writes the state
 // file atomically). Managed by Quay — edits will be overwritten on reinstall.
 //
-// OpenCode has no clean "turn started" event, so "working" comes from
-// permission.replied plus Quay's own CPU heuristic; idle and waiting are exact.
+// session.created      -> idle     a session exists before it has run anything
+// tool.execute.before   -> working
+// permission.asked      -> waiting
+// permission.replied    -> working
+// session.idle          -> idle
+// session.deleted       -> ended
+//
+// `tool.execute.before` is the closest thing OpenCode has to "turn started": it is
+// bounded (once per tool call, like Claude's PostToolUse) where message.updated fires
+// on every stream chunk and would spawn the helper continuously. It does not cover a
+// turn that only thinks and never calls a tool, so a short reply can still read idle
+// until session.idle confirms it — narrower than the old CPU heuristic, not a total
+// replacement for it.
 import { spawn } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
@@ -30,6 +41,10 @@ export const QuayRadar = async ({ directory }) => ({
 	event: async ({ event }) => {
 		const id = event?.properties?.sessionID;
 		switch (event?.type) {
+			case "session.created":
+				return report("idle", id, directory);
+			case "tool.execute.before":
+				return report("working", id, directory);
 			case "session.idle":
 				return report("idle", id, directory);
 			case "permission.asked":

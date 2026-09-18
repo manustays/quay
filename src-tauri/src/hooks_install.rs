@@ -520,6 +520,36 @@ mod tests {
 	}
 
 	#[test]
+	fn pi_extension_covers_the_whole_session_lifecycle() {
+		// Without session_start a session that opens and sits idle is invisible;
+		// without session_shutdown its state file leaks. ui_prompt_* is the only
+		// "blocked on a question" signal pi has, since it has no permission prompt.
+		for event in ["session_start", "ui_prompt_start", "ui_prompt_end", "session_shutdown"] {
+			assert!(PI_TS.contains(event), "pi adapter must handle {event}");
+		}
+		// A prompt can be raised mid-run or at rest, so where it returns to is asked,
+		// not assumed.
+		assert!(PI_TS.contains("isIdle"), "ui_prompt_end must ask whether work resumed");
+	}
+
+	#[test]
+	fn opencode_adapter_has_a_real_working_signal() {
+		// The adapter used to lean on the radar's CPU heuristic for "working" because
+		// it only watched permission.replied. tool.execute.before is bounded — once
+		// per tool call — where message.updated fires on every stream chunk and would
+		// spawn the helper continuously.
+		assert!(OPENCODE_JS.contains("session.created"), "a new session must be discovered");
+		assert!(OPENCODE_JS.contains("tool.execute.before"), "needs a real working signal");
+		// Match the subscription, not the prose: the comment above it in the asset
+		// explains why message.updated is the wrong choice, and naming it there must
+		// not fail the test.
+		assert!(
+			!OPENCODE_JS.contains("case \"message.updated\""),
+			"message.updated fires per stream chunk — one helper spawn each"
+		);
+	}
+
+	#[test]
 	fn refresh_updates_an_installed_config_but_never_opts_anyone_in() {
 		// The content we install changes between app versions. Without this refresh a
 		// corrected matcher would only reach someone who toggled the hook in Settings.
