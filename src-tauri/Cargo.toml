@@ -41,6 +41,9 @@ tauri-plugin-dialog = "2.7.1"
 tauri-plugin-autostart = "2.5.1"
 tauri-plugin-updater = "2"
 sysinfo = "0.39"
+# Library only: the shared process-identity lookup behind hook state files. The
+# helper binary itself ships as a bundled resource, never as a bin of this package.
+quay-hook = { path = "crates/quay-hook" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3", features = ["NSWorkspace"] }

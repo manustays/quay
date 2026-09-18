@@ -240,6 +240,16 @@ would vanish from the radar.
 
 All four fields are optional, so a file written by an older helper still parses.
 
+**What consumes them.** The always-on badge path uses `(pid, startedAt)` directly:
+liveness stops being a guess, so a crashed session clears immediately instead of
+sitting out the 10-minute grace, and the `ps` fork that grace existed to avoid is not
+run at all. It is still run, lazily, if a file from an older helper turns up — the
+pruner takes the enumeration unevaluated and only forces it on meeting one.
+
+This is also per-session rather than per-folder: a dead session sharing a folder with
+a live sibling used to keep the tray badge lit, because the coarse `(agent, cwd)` PID
+map could not tell them apart.
+
 ### Manual install (appendix)
 
 The Settings button is the supported path; this is the equivalent by hand, e.g.

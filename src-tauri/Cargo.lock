@@ -2503,6 +2503,7 @@ dependencies = [
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-foundation",
+ "quay-hook",
  "serde",
  "serde_json",
  "sysinfo",

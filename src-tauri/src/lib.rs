@@ -225,9 +225,12 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle, force_prune: bool) {
 	// only in this `count > 0` branch *and* only when the rate limit allows, since
 	// "an agent is waiting on you" is a steady state, not a rare one.
 	let count = if count > 0 && (force_prune || claim_prune_slot(&st)) {
+		// Passed unevaluated: every state file written by a current helper names its
+		// own process, so the `ps` fork behind this only happens if a file from an
+		// older helper is still around.
 		agent_radar::prune_orphan_hook_states(
 			&dir,
-			&agent_radar::live_agent_keys(&ignored),
+			|| agent_radar::live_agent_keys(&ignored),
 			std::time::SystemTime::now(),
 		);
 		let pids = st.last_agent_pids.lock().unwrap().clone();

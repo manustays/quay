@@ -766,24 +766,51 @@ pub fn waiting_count(
 		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
 			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
 			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string()))
+			Some((
+				agent,
+				v["cwd"].as_str()?.to_string(),
+				v["state"].as_str()?.to_string(),
+				recorded_identity(&v),
+			))
 		});
-		let Some((agent, cwd, state)) = parsed else { continue };
+		let Some((agent, cwd, state, identity)) = parsed else { continue };
 		if state != "waiting" {
 			continue;
 		}
 		if ignored.iter().any(|i| i.agent == agent && i.cwd == cwd) {
 			continue;
 		}
-		// Scanned and every PID for the key is dead → crashed/exited session, skip.
-		if let Some(seen) = pids.get(&(agent.clone(), cwd.clone())) {
-			if !seen.is_empty() && !seen.iter().any(|&p| pid_alive(p)) {
-				continue;
+		match identity {
+			// The file names its own process, so liveness is exact and per-session:
+			// no `ps`, and a dead sibling in a shared folder no longer badges.
+			Some((pid, started_at)) => {
+				if !quay_hook::proc_info::is_same_process(pid, started_at) {
+					continue;
+				}
+			}
+			// Written by an older helper: fall back to the coarse per-(agent, cwd)
+			// PIDs the popover scan stamped. Scanned and all dead → skip; never
+			// scanned → count it and let the next scan reconcile.
+			None => {
+				if let Some(seen) = pids.get(&(agent.clone(), cwd.clone())) {
+					if !seen.is_empty() && !seen.iter().any(|&p| pid_alive(p)) {
+						continue;
+					}
+				}
 			}
 		}
 		keys.insert((agent, cwd));
 	}
 	keys.len()
+}
+
+/// The `(pid, startedAt)` a hook state file names, when it has one.
+///
+/// Both or neither: a pid without its start time is exactly the ambiguous liveness
+/// check this pair exists to replace, so a half-written file is treated as legacy.
+fn recorded_identity(v: &serde_json::Value) -> Option<(u32, u64)> {
+	let pid = v["pid"].as_u64()?.try_into().ok()?;
+	Some((pid, v["startedAt"].as_u64()?))
 }
 
 /// Live `(agent, cwd)` keys right now — tty-attached agent processes with a
@@ -828,8 +855,14 @@ pub fn live_agent_keys(ignored: &[crate::model::IgnoredAgent]) -> HashSet<(Strin
 /// [`hook_states`] / [`waiting_count`], so the always-on path doesn't change their
 /// handling), and the grace rides out a transient cwd-resolution miss the same way
 /// `hook_states` does. Pure — no process enumeration — so it unit-tests headlessly.
-pub fn prune_orphan_hook_states(dir: &Path, live: &HashSet<(String, String)>, now: SystemTime) {
+pub fn prune_orphan_hook_states(
+	dir: &Path,
+	live: impl Fn() -> HashSet<(String, String)>,
+	now: SystemTime,
+) {
 	let Ok(rd) = std::fs::read_dir(dir) else { return };
+	// Only materialised if a legacy file turns up, because producing it forks `ps`.
+	let mut legacy_live: Option<HashSet<(String, String)>> = None;
 	for entry in rd.flatten() {
 		let path = entry.path();
 		if path.extension().is_none_or(|x| x != "json") {
@@ -838,10 +871,28 @@ pub fn prune_orphan_hook_states(dir: &Path, live: &HashSet<(String, String)>, no
 		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
 			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
 			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+			Some((
+				agent,
+				v["cwd"].as_str()?.to_string(),
+				v["state"].as_str()?.to_string(),
+				v["ts"].as_u64()?,
+				recorded_identity(&v),
+			))
 		});
-		let Some((agent, cwd, state, ts)) = parsed else { continue };
-		if state != "waiting" || live.contains(&(agent.clone(), cwd.clone())) {
+		let Some((agent, cwd, state, ts, identity)) = parsed else { continue };
+		if state != "waiting" {
+			continue;
+		}
+		// A file that names its own process needs no grace and no enumeration: the
+		// (pid, start-time) pair either still exists or it does not.
+		if let Some((pid, started_at)) = identity {
+			if !quay_hook::proc_info::is_same_process(pid, started_at) {
+				let _ = std::fs::remove_file(&path);
+			}
+			continue;
+		}
+		let live = legacy_live.get_or_insert_with(&live);
+		if live.contains(&(agent.clone(), cwd.clone())) {
 			continue;
 		}
 		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
@@ -1160,12 +1211,47 @@ mod tests {
 		write("working.json", "/gone3", "working", stale); // not waiting → untouched
 
 		let live: HashSet<(String, String)> = [("claude".to_string(), "/live".to_string())].into();
-		prune_orphan_hook_states(&dir, &live, now);
+		prune_orphan_hook_states(&dir, || live.clone(), now);
 
 		assert!(!dir.join("dead_stale.json").exists(), "dead+stale waiting must be pruned");
 		assert!(dir.join("dead_fresh.json").exists(), "within-grace waiting must survive");
 		assert!(dir.join("live.json").exists(), "live-keyed waiting must survive");
 		assert!(dir.join("working.json").exists(), "non-waiting files are out of scope");
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_file_naming_its_own_process_needs_no_grace_and_no_ps() {
+		// The point of recording (pid, startedAt): liveness stops being a guess, so a
+		// crashed session clears immediately instead of sitting out a 10-minute grace,
+		// and the enumeration that grace existed to avoid is never run.
+		let dir = std::env::temp_dir().join(format!("quay-prune-id-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let now = SystemTime::now();
+		let secs = |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+
+		let me = std::process::id();
+		let started = quay_hook::proc_info::info(me).unwrap().started_at;
+		let write = |name: &str, cwd: &str, pid: u32, started_at: u64, ts: u64| {
+			let body = serde_json::json!({
+				"agent": "claude", "cwd": cwd, "state": "waiting",
+				"ts": ts, "pid": pid, "startedAt": started_at,
+			});
+			std::fs::write(dir.join(name), body.to_string()).unwrap();
+		};
+		// Alive, and fresher than nothing — must survive regardless of age.
+		write("alive.json", "/a", me, started, secs(now) - (HOOK_PRUNE_GRACE_SECS + 600));
+		// Same pid, different start time: the recycled-pid case. Must be dropped.
+		write("recycled.json", "/b", me, started + 1, secs(now));
+		// A pid nothing is using. Must be dropped, with no grace.
+		write("gone.json", "/c", 4_000_000_000, started, secs(now));
+
+		// Panics if called — proving the `ps` path is never reached for these files.
+		prune_orphan_hook_states(&dir, || unreachable!("must not enumerate processes"), now);
+
+		assert!(dir.join("alive.json").exists(), "a live process keeps its row, however old");
+		assert!(!dir.join("recycled.json").exists(), "a recycled pid is not the same session");
+		assert!(!dir.join("gone.json").exists(), "a dead process clears at once");
 		let _ = std::fs::remove_dir_all(&dir);
 	}
 
@@ -1227,6 +1313,36 @@ mod tests {
 		let ignored = vec![IgnoredAgent { agent: "codex".into(), cwd: "/b".into() }];
 		assert_eq!(waiting_count(&d, &ignored, &no_pids), 1);
 		std::fs::remove_dir_all(&d).ok();
+	}
+
+	#[test]
+	fn waiting_count_trusts_a_recorded_identity_over_the_scanned_pids() {
+		// Per-session liveness, which the coarse (agent, cwd) PID map cannot do: a
+		// dead session sharing a folder with a live sibling used to keep the badge lit.
+		let dir = std::env::temp_dir().join(format!("quay-wc-id-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let me = std::process::id();
+		let started = quay_hook::proc_info::info(me).unwrap().started_at;
+		let write = |name: &str, cwd: &str, pid: u32, started_at: u64| {
+			let body = serde_json::json!({
+				"agent": "claude", "cwd": cwd, "state": "waiting",
+				"ts": 1_000_000, "pid": pid, "startedAt": started_at,
+			});
+			std::fs::write(dir.join(name), body.to_string()).unwrap();
+		};
+		write("live.json", "/shared", me, started);
+		write("dead.json", "/shared2", 4_000_000_000, started);
+		write("recycled.json", "/shared3", me, started + 1);
+
+		// Deliberately empty: the recorded identity must be used instead, so the map
+		// the popover scan stamps is not consulted at all.
+		let pids = HashMap::new();
+		assert_eq!(
+			waiting_count(&dir, &[], &pids),
+			1,
+			"only the session whose process is genuinely still there counts"
+		);
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
 	#[test]

@@ -97,6 +97,20 @@ fn c_str(raw: &[libc::c_char]) -> Option<String> {
 	String::from_utf8(bytes).ok().filter(|s| !s.is_empty())
 }
 
+/// Is the process recorded as `(pid, started_at)` still that same process?
+///
+/// The whole point of recording the start time. `kill(pid, 0)` answers "is *a*
+/// process alive under this number", which is a different and much weaker question:
+/// pids are recycled, so a dead session's number is eventually reused by something
+/// unrelated, and after a reboot low numbers are reused immediately. Comparing the
+/// start time makes the answer about *this* process.
+///
+/// Reads as dead if the process cannot be inspected at all. Agents run as the same
+/// user as Quay, so that means gone rather than forbidden.
+pub fn is_same_process(pid: u32, started_at: u64) -> bool {
+	info(pid).is_some_and(|p| p.started_at == started_at)
+}
+
 /// Does this executable path belong to `agent`?
 ///
 /// Basename match, mirroring how `agent_radar::agent_from_argv` identifies a session
@@ -178,5 +192,20 @@ mod tests {
 		// Nothing in our ancestry is called this, so the walk must run out and return
 		// None rather than fall back to whatever it happened to be looking at.
 		assert!(find_agent(std::process::id(), "definitely-not-an-agent").is_none());
+	}
+
+	#[test]
+	fn identity_is_the_pair_not_the_pid() {
+		let me = std::process::id();
+		let started = info(me).expect("our own process").started_at;
+		assert!(is_same_process(me, started), "our own pid and start time must match");
+
+		// The same pid with any other start time is a different process — this is the
+		// recycled-pid case, and the only thing standing between it and a session row
+		// that never goes away.
+		assert!(!is_same_process(me, started + 1));
+		assert!(!is_same_process(me, 0));
+		// A pid nothing is using reads as gone rather than as a match.
+		assert!(!is_same_process(4_000_000_000, started));
 	}
 }

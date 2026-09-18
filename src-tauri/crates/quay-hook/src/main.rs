@@ -21,7 +21,7 @@
 //! link all of tauri into a helper that runs on every hook event.
 //! Always exits 0: a broken helper must never block a Claude Code turn.
 
-mod proc_info;
+use quay_hook::proc_info;
 
 use std::io::Read;
 use std::path::PathBuf;
