@@ -70,14 +70,27 @@ forks `ps`, no longer refreshes `sysinfo` over every tty-attached process twice,
 longer sleeps 200 ms to get a CPU delta it then displayed. The sleep was wall-clock, not
 CPU — removing it buys latency, not percent.
 
-Measured 2026-09-19, debug build, on a seven-item config with ~185 tty-attached
-processes on the machine:
+Measured 2026-09-19, debug build, seven-item config, ~185 tty-attached processes on
+the machine, no stale state files:
 
-| State | quay CPU | idle wakeups/min |
-|---|---|---|
-| Popover closed, three stale legacy state files | 1.28 % | ~100 |
-| **Popover closed, none** | **0.11 %** | **0.4** |
-| Popover open | 1.25 % | n/a — never idles |
+| State | quay CPU | renderer CPU | idle wakeups/min |
+|---|---|---|---|
+| Popover closed | **0.10 %** | 0.00 % | **0.0** |
+| Popover open | **0.45 %** | 0.51 % | 4.0 |
+
+**Opening the popover costs 0.35 % of backend CPU**, against 1.06 % before the hook
+rewrite (1.10 % open minus 0.04 % closed, in the table below). The delta is the honest
+comparison; the absolutes come from different configs.
+
+Two things that were not true before and are worth knowing:
+
+- **The process now idles while the popover is open.** The trap below says `IDLEW`
+  reads ~0 while open because the loops never let it idle. It reads 4.0 now — there is
+  simply less to do between passes. The trap still applies to *comparing* open and
+  closed wakeups; it no longer means the number is meaningless.
+- **The renderer costs more than the backend it displays** (0.51 % against 0.45 %).
+  That is React re-rendering on the 5 s port, 5 s agent and 10 s metrics events, and
+  nothing here has touched it. It is the obvious next thing to look at, not the loops.
 
 **A stale hook-state file from before identity stamping is expensive.** It keeps the
 waiting count above zero, which enables the orphan sweep, and the legacy branch of that
