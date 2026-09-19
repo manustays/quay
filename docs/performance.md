@@ -28,6 +28,14 @@ Three traps, all of which produce confidently wrong numbers:
 - **Idle wakeups only mean something with the popover closed.** While it's open the
   loops keep the process busy enough that it never idles, so `IDLEW` reads ~0 however
   much work is happening. Open-state cost shows up in CPU %, not wakeups.
+- **`top -pid` counts only Quay's own CPU.** Work done in a child — `brew services
+  list` (Homebrew is Ruby, ~0.57 s of CPU per call), `ps`, `lsof`, `docker` — never
+  appears in these numbers, however expensive it is. Do not explain a reading by
+  pointing at a fork without checking where its cost actually lands.
+- **Absolute numbers are config-specific.** A machine with seven items (each polled,
+  some with TCP/HTTP probes) and one with none are not comparable, whatever the code
+  says. Compare *open minus closed* on one config instead: the always-on work cancels
+  out, leaving what opening the popover actually costs.
 - **The webview is a separate process.** `top -pid <quay>` cannot see it, so anything
   in the frontend — a CSS animation, for instance — is invisible unless you sample
   `com.apple.WebKit.WebContent` too. WebKit XPC services are reparented to launchd, so
@@ -59,8 +67,22 @@ the `ps`-forking orphan sweep, and replacing two 500 ms idle ticks with condvar 
 
 Since then the agent pass has been rebuilt on hook state files: per pass it no longer
 forks `ps`, no longer refreshes `sysinfo` over every tty-attached process twice, and no
-longer sleeps 200 ms to get a CPU delta it then displayed. Re-measure before quoting a
-number — the figures below predate it.
+longer sleeps 200 ms to get a CPU delta it then displayed. The sleep was wall-clock, not
+CPU — removing it buys latency, not percent.
+
+Measured 2026-09-19, debug build, on a seven-item config with ~185 tty-attached
+processes on the machine:
+
+| State | quay CPU |
+|---|---|
+| Popover closed | 1.28 % |
+| Popover open | 1.25 % |
+
+**Opening the popover no longer costs anything measurable.** That is the number this
+work moved: the same comparison on the table below was 1.10 % open against 0.04 %
+closed, a delta of ~1.06 %, which was the metrics loop, the port radar and the agent
+scan starting up. The absolute figures are not comparable across the two configs (see
+the traps above); the delta within one config is.
 
 **Open-state cost is unchanged**, and a 40 s `sample` profile shows why nothing obvious
 is left: every thread is parked in a kernel wait, and the real cost is the `lsof`/`ps`
