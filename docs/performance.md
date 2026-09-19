@@ -73,10 +73,25 @@ CPU — removing it buys latency, not percent.
 Measured 2026-09-19, debug build, on a seven-item config with ~185 tty-attached
 processes on the machine:
 
-| State | quay CPU |
-|---|---|
-| Popover closed | 1.28 % |
-| Popover open | 1.25 % |
+| State | quay CPU | idle wakeups/min |
+|---|---|---|
+| Popover closed, three stale legacy state files | 1.28 % | ~100 |
+| **Popover closed, none** | **0.11 %** | **0.4** |
+| Popover open | 1.25 % | n/a — never idles |
+
+**A stale hook-state file from before identity stamping is expensive.** It keeps the
+waiting count above zero, which enables the orphan sweep, and the legacy branch of that
+sweep enumerates every tty-attached process to decide liveness (~185 here, each needing
+a `proc_pidinfo` and a `KERN_PROCARGS2`). One burst a minute averages out to ~100 idle
+wakeups/min and about twelve times the CPU. Worse, such a file can be immortal: the
+legacy rule only deletes one whose `(agent, cwd)` has no live session, so a live session
+in the same folder pins it — and a *waiting* session emits no further event to re-stamp
+it until someone answers the prompt.
+
+Mitigated by running that sweep every ten minutes rather than every minute
+(`PRUNE_INTERVAL_SECS`), which is safe because the badge does not depend on it:
+`waiting_count` checks each file's own `(pid, startedAt)`. If you are upgrading and see
+idle wakeups stuck in the tens, look for pid-less files in `agent-state/`.
 
 **Opening the popover no longer costs anything measurable.** That is the number this
 work moved: the same comparison on the table below was 1.10 % open against 0.04 %

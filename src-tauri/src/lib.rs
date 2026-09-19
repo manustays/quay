@@ -109,10 +109,22 @@ fn mac_screen_geometry(anchor: TrayAnchor) -> Option<MacScreenGeometry> {
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 86_400;
 
 /// How often the always-on badge path sweeps orphaned `waiting` hook-state files.
-/// The sweep forks `ps`, so it is deliberately rare: it only fixes a phantom count
-/// (a session that died without a clearing hook), which no user is waiting on. The
-/// popover-open path prunes unconditionally, so opening Quay still heals instantly.
-pub const PRUNE_INTERVAL_SECS: u64 = 60;
+///
+/// Only files with no recorded `(pid, startedAt)` — written by a helper from before
+/// identity stamping — can reach the expensive branch, and only they need this at
+/// all: a file that names its own process is checked with a syscall, and
+/// `waiting_count` already refuses to count one whose process is gone, so the badge
+/// is correct without any sweep. What the sweep does is tidy the files up.
+///
+/// Ten minutes, not one, because the legacy branch enumerates every tty-attached
+/// process to decide liveness. Measured on a machine with ~185 of them and three
+/// stale files: 1.3 % CPU and ~100 idle wakeups/min, against 0.11 % and 0.4 once
+/// they were gone — a burst of thousands of wakeups once a minute, averaged out.
+/// A stale legacy file can also be immortal: the legacy rule only deletes one whose
+/// `(agent, cwd)` has no live session, so a live session in the same folder pins it,
+/// and a *waiting* session emits no further event to re-stamp it with an identity
+/// until someone answers it.
+pub const PRUNE_INTERVAL_SECS: u64 = 600;
 
 /// Set popover visibility everywhere it matters: the shared flag the gated loops
 /// block on, and the frontend event that pauses the always-running CSS animations
