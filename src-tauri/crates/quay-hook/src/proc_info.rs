@@ -111,12 +111,24 @@ pub fn is_same_process(pid: u32, started_at: u64) -> bool {
 	info(pid).is_some_and(|p| p.started_at == started_at)
 }
 
-/// Does this executable path belong to `agent`?
-///
-/// Basename match, mirroring how `agent_radar::agent_from_argv` identifies a session
-/// from argv\[0\]. Pure, so the walk below stays testable.
-pub fn is_agent_exe(exe: &str, agent: &str) -> bool {
+/// Is this executable *named* `agent`? The precise signal: `/opt/homebrew/bin/claude`,
+/// `/usr/local/bin/codex`.
+pub fn exe_basename_is(exe: &str, agent: &str) -> bool {
 	exe.rsplit('/').next().unwrap_or(exe) == agent
+}
+
+/// Does this path run *out of* an `agent` directory?
+///
+/// The looser signal, and the one that matters in practice. A real Claude Code install
+/// runs `~/.local/share/claude/versions/2.1.277` — the executable is named after the
+/// version, never after the agent, so a basename match alone never fires for it. The
+/// directory is what identifies it.
+///
+/// Looser means it can be fooled by an unrelated program living under a directory
+/// named after an agent, which is why [`find_agent`] only consults it when no exact
+/// match exists anywhere in the chain.
+pub fn exe_under_agent_dir(exe: &str, agent: &str) -> bool {
+	exe.split('/').any(|part| part == agent)
 }
 
 /// How far up to look for the agent. Claude Code runs a hook through a shell, so the
@@ -150,18 +162,23 @@ pub fn ancestor_exes(pid: u32, max_hops: usize) -> Vec<String> {
 /// state file carrying *its* pid would read as dead immediately and the session would
 /// vanish from the radar. No pid just means the old `(agent, cwd)` behaviour.
 pub fn find_agent(start: u32, agent: &str) -> Option<ProcInfo> {
+	let mut chain = Vec::new();
 	let mut current = start;
 	for _ in 0..MAX_HOPS {
-		let proc_ = info(current)?;
-		if is_agent_exe(&proc_.exe, agent) {
-			return Some(proc_);
+		let Some(proc_) = info(current) else { break };
+		let ppid = proc_.ppid;
+		chain.push(proc_);
+		if ppid <= 1 {
+			break;
 		}
-		if proc_.ppid <= 1 {
-			return None;
-		}
-		current = proc_.ppid;
+		current = ppid;
 	}
-	None
+	// Precision first: an executable actually named after the agent, nearest wins.
+	// Only if the whole chain has none do we accept the looser directory match, so a
+	// stray program living under an agent-named folder cannot outrank the real thing.
+	let exact = chain.iter().position(|p| exe_basename_is(&p.exe, agent));
+	let found = exact.or_else(|| chain.iter().position(|p| exe_under_agent_dir(&p.exe, agent)))?;
+	Some(chain.swap_remove(found))
 }
 
 #[cfg(test)]
@@ -169,16 +186,30 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn agent_is_matched_by_basename_not_by_substring() {
-		assert!(is_agent_exe("/opt/homebrew/bin/claude", "claude"));
-		assert!(is_agent_exe("claude", "claude"));
-		assert!(is_agent_exe("/Users/x/.pi/bin/pi", "pi"));
-		// A project path that merely contains the name is not the agent.
-		assert!(!is_agent_exe("/Users/x/claude/notes/editor", "claude"));
-		// Nor is a different agent.
-		assert!(!is_agent_exe("/usr/local/bin/codex", "claude"));
-		// Nor a longer name sharing the prefix.
-		assert!(!is_agent_exe("/usr/local/bin/claude-helper", "claude"));
+	fn an_exact_name_is_the_precise_signal() {
+		assert!(exe_basename_is("/opt/homebrew/bin/claude", "claude"));
+		assert!(exe_basename_is("claude", "claude"));
+		assert!(exe_basename_is("/Users/x/.pi/bin/pi", "pi"));
+		// A directory that merely shares the name is not an exact match.
+		assert!(!exe_basename_is("/Users/x/claude/notes/editor", "claude"));
+		// Nor is a different agent, nor a longer name sharing the prefix.
+		assert!(!exe_basename_is("/usr/local/bin/codex", "claude"));
+		assert!(!exe_basename_is("/usr/local/bin/claude-helper", "claude"));
+	}
+
+	#[test]
+	fn a_versioned_install_is_matched_by_its_directory() {
+		// The real shape, read off a live machine: Claude Code's executable is named
+		// after the version, so nothing about the *file* says "claude".
+		let real = "/Users/abhi/.local/share/claude/versions/2.1.277";
+		assert!(!exe_basename_is(real, "claude"), "this is why the loose check exists");
+		assert!(exe_under_agent_dir(real, "claude"));
+
+		// Component match, not substring: a sibling directory must not qualify.
+		assert!(!exe_under_agent_dir("/Users/x/claude-backups/tool", "claude"));
+		assert!(!exe_under_agent_dir("/Users/x/notclaude/tool", "claude"));
+		// And it stays agent-specific.
+		assert!(!exe_under_agent_dir(real, "codex"));
 	}
 
 	#[test]
