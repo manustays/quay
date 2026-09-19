@@ -6,6 +6,7 @@ This guide walks through the day-to-day use of Quay.
 
 Left-click the menubar icon to open the popover. It has:
 
+- A **title bar** at the top: click **Quay** to open [the website](https://abhi.am/quay), or the **version badge** to open the GitHub release notes.
 - A **search box** and a **Stop all** button at the top.
 - A **FAVORITES** section (items you've starred).
 - A collapsible **More (n)** section for everything else. Items that share a
