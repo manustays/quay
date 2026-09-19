@@ -52,7 +52,7 @@ Clicking the **`:port` label** copies that same URL to the clipboard.
 
 Click the **body** of a row to expand it — you'll see the tail of its log file, plus **Edit**, **Favorite**, **Reveal** (show the folder in Finder), and **Delete**.
 
-## The four kinds of items
+## The five kinds of items
 
 ### 1. Project servers (`kind: project`)
 
@@ -89,12 +89,25 @@ Standalone command-line tools and binaries — interactive long-running tools ru
 - **dir** + **startCmd** — e.g. `claude` in a project folder.
 - **runMode** — `terminal` (opens a Terminal/iTerm window you can type into).
 
+### 5. Command services (`kind: command`)
+
+A daemon that Quay *manages* but never *owns* — it has its own start/stop CLI (oMLX, a launchd service, …).
+
+- **startCmd** — e.g. `omlx start`. Run via `zsh -lc`; it launches the daemon detached and returns.
+- **stopCmd** — e.g. `omlx stop`. Optional on save, but stopping from Quay needs it: there is no owned process to signal and no port-kill fallback.
+- **port** — required. Status comes from the port and is polled even while the item is stopped, so starting or stopping the daemon outside Quay is reflected within one poll.
+- **runMode** is ignored, and the daemon is **left running when Quay quits** (like brew and terminal items).
+
+See [Command services](configuration.md#command-services-kind-command) for the full model.
+
 ## Run modes
 
 | Mode | Behavior | Use for |
 |------|----------|---------|
 | `background` | App spawns the command as a hidden child process; stdout/stderr go to a log file. The app owns and can stop it. | Servers, brew |
 | `terminal` | App opens a Terminal/iTerm window running the command, so you can interact with it. The app does **not** own this process; stop is best-effort. | Interactive CLI tools |
+
+`command` items ignore `runMode` entirely — Quay runs their `startCmd`/`stopCmd` and never holds a process.
 
 ## Adding an item
 
