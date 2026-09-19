@@ -208,11 +208,10 @@ pub fn init_state(dir: std::path::PathBuf) -> AppState {
 		statuses: std::sync::Mutex::new(std::collections::HashMap::new()),
 		errors: std::sync::Mutex::new(std::collections::HashMap::new()),
 		suppress_hide: std::sync::atomic::AtomicBool::new(false),
-		visible: std::sync::atomic::AtomicBool::new(false),
+		active: std::sync::atomic::AtomicBool::new(false),
 		update_in_flight: std::sync::atomic::AtomicBool::new(false),
 		pending_update: std::sync::Mutex::new(None),
 		waiting_count: std::sync::atomic::AtomicUsize::new(0),
-		last_agent_pids: std::sync::Mutex::new(std::collections::HashMap::new()),
 		wake: (std::sync::Mutex::new(crate::state::Wake::default()), std::sync::Condvar::new()),
 		// Backdated so the first orphan sweep isn't held off for a whole interval
 		// after launch (`checked_sub` guards a monotonic clock younger than it).

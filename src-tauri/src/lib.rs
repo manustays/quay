@@ -5,6 +5,8 @@ pub mod detect;
 pub mod docker;
 pub mod health;
 pub mod hooks_install;
+#[cfg(target_os = "macos")]
+pub mod mac_power;
 pub mod metrics;
 pub mod model;
 pub mod scanner;
@@ -29,6 +31,17 @@ use tauri::{
 /// after-the-fact forensics. Reserved for genuine failures; the happy path stays silent.
 fn log_warn(context: &str, detail: impl std::fmt::Display) {
 	eprintln!("[quay] {context}: {detail}");
+}
+
+/// Opt-in trace, for state that is invisible by construction.
+///
+/// The power gate parks the app precisely when nobody is looking at it, so there is
+/// no way to watch it work without being told. Silent unless `QUAY_TRACE` is set,
+/// which keeps [`log_warn`]'s "the happy path stays silent" rule intact.
+fn log_trace(context: &str, detail: impl std::fmt::Display) {
+	if std::env::var_os("QUAY_TRACE").is_some() {
+		eprintln!("[quay] {context}: {detail}");
+	}
 }
 
 #[cfg(target_os = "macos")]
@@ -96,24 +109,49 @@ fn mac_screen_geometry(anchor: TrayAnchor) -> Option<MacScreenGeometry> {
 const UPDATE_CHECK_INTERVAL_SECS: u64 = 86_400;
 
 /// How often the always-on badge path sweeps orphaned `waiting` hook-state files.
-/// The sweep forks `ps`, so it is deliberately rare: it only fixes a phantom count
-/// (a session that died without a clearing hook), which no user is waiting on. The
-/// popover-open path prunes unconditionally, so opening Quay still heals instantly.
-pub const PRUNE_INTERVAL_SECS: u64 = 60;
+///
+/// Only files with no recorded `(pid, startedAt)` — written by a helper from before
+/// identity stamping — can reach the expensive branch, and only they need this at
+/// all: a file that names its own process is checked with a syscall, and
+/// `waiting_count` already refuses to count one whose process is gone, so the badge
+/// is correct without any sweep. What the sweep does is tidy the files up.
+///
+/// Ten minutes, not one, because the legacy branch enumerates every tty-attached
+/// process to decide liveness. Measured on a machine with ~185 of them and three
+/// stale files: 1.3 % CPU and ~100 idle wakeups/min, against 0.11 % and 0.4 once
+/// they were gone — a burst of thousands of wakeups once a minute, averaged out.
+/// A stale legacy file can also be immortal: the legacy rule only deletes one whose
+/// `(agent, cwd)` has no live session, so a live session in the same folder pins it,
+/// and a *waiting* session emits no further event to re-stamp it with an identity
+/// until someone answers it.
+pub const PRUNE_INTERVAL_SECS: u64 = 600;
 
 /// Set popover visibility everywhere it matters: the shared flag the gated loops
 /// block on, and the frontend event that pauses the always-running CSS animations
 /// while the window is hidden. The single writer — see [`state::AppState::set_visible`].
 fn set_popover_visible(app: &tauri::AppHandle, vis: bool) {
 	app.state::<state::AppState>().set_visible(vis);
-	let _ = app.emit("popover_visibility", vis);
+	emit_render_active(app);
 }
 
-/// Current popover visibility, for the frontend to seed its own state on mount —
-/// a reload while hidden would otherwise miss the event and keep animating.
+/// Tell the frontend whether to animate. The event carries the *derived* state —
+/// popover open **and** someone able to see it — because a popover left open when
+/// the display sleeps would otherwise keep compositing its `animate-pulse` dots at
+/// a dark screen. The frontend only ever uses this to set `html[data-hidden]`, so
+/// the derived value is what it wanted all along; nothing under `src/` changes.
+///
+/// Every writer of the wake state calls this: the popover setter above and the
+/// screen/lock observers in [`mac_power`].
+pub fn emit_render_active(app: &tauri::AppHandle) {
+	let active = app.state::<state::AppState>().is_active();
+	let _ = app.emit("popover_visibility", active);
+}
+
+/// Current render-active state, for the frontend to seed itself on mount — a reload
+/// while hidden would otherwise miss the event and keep animating.
 #[tauri::command]
 fn get_popover_visible(state: tauri::State<state::AppState>) -> bool {
-	state.visible.load(std::sync::atomic::Ordering::Relaxed)
+	state.is_active()
 }
 
 /// Reflect service health *and* waiting agents on the tray. Icon precedence:
@@ -188,10 +226,7 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle, force_prune: bool) {
 		return;
 	}
 	let dir = st.dir.join("agent-state");
-	let count = {
-		let pids = st.last_agent_pids.lock().unwrap().clone();
-		agent_radar::waiting_count(&dir, &ignored, &pids)
-	};
+	let count = agent_radar::waiting_count(&dir, &ignored);
 	// A phantom count — a `waiting` file whose session died without a clearing
 	// hook — otherwise self-heals only on a popover scan. When the badge would
 	// show, sweep orphaned waiting files (crashed/exited: no live process, event
@@ -199,13 +234,15 @@ pub fn refresh_waiting_badge(app: &tauri::AppHandle, force_prune: bool) {
 	// only in this `count > 0` branch *and* only when the rate limit allows, since
 	// "an agent is waiting on you" is a steady state, not a rare one.
 	let count = if count > 0 && (force_prune || claim_prune_slot(&st)) {
+		// Passed unevaluated: every state file written by a current helper names its
+		// own process, so the `ps` fork behind this only happens if a file from an
+		// older helper is still around.
 		agent_radar::prune_orphan_hook_states(
 			&dir,
-			&agent_radar::live_agent_keys(&ignored),
+			|| agent_radar::live_agent_keys(&ignored),
 			std::time::SystemTime::now(),
 		);
-		let pids = st.last_agent_pids.lock().unwrap().clone();
-		agent_radar::waiting_count(&dir, &ignored, &pids)
+		agent_radar::waiting_count(&dir, &ignored)
 	} else {
 		count
 	};
@@ -529,6 +566,11 @@ fn show_popover(app: &tauri::AppHandle, win: &tauri::WebviewWindow) {
 	// Mirror `visible` to the actual outcome of the window op.
 	match win.show() {
 		Ok(()) => {
+			// A click is not evidence about the display, but it is a good moment to
+			// re-read it: if a screen/lock notification was ever missed, this is what
+			// stops a stale flag wedging the always-on loop parked forever.
+			#[cfg(target_os = "macos")]
+			mac_power::reconcile(app);
 			set_popover_visible(app, true);
 			if let Err(e) = win.set_focus() {
 				log_warn("popover focus failed", e);
@@ -687,10 +729,19 @@ pub fn run() {
 				let app_handle = app.handle().clone();
 				std::thread::spawn(move || {
 					let st = app_handle.state::<state::AppState>();
-					if st.dir.join("bin/quay-hook").exists() {
-						if let Some(src) = hooks_install::bundled_hook(&app_handle) {
-							let _ = hooks_install::install_helper(&src, &st.dir);
-						}
+					if !st.dir.join("bin/quay-hook").exists() {
+						return;
+					}
+					if let Some(src) = hooks_install::bundled_hook(&app_handle) {
+						let _ = hooks_install::install_helper(&src, &st.dir);
+					}
+					// The configs themselves also go stale: a corrected event matcher or
+					// a fixed plugin would otherwise only reach someone who toggled the
+					// hook off and on in Settings. Only refreshes agents already opted in.
+					let Some(home) = dirs::home_dir() else { return };
+					let refreshed = hooks_install::refresh_installed(&home, &st.dir);
+					if !refreshed.is_empty() {
+						log_trace("hooks refreshed", refreshed.join(", "));
 					}
 				});
 			}
@@ -756,6 +807,10 @@ pub fn run() {
 			}
 
 			// Start the background status-poll loop.
+			// Before the loops start, so none of them polls at a screen that is
+			// already asleep (a relaunch into a locked Mac, say).
+			#[cfg(target_os = "macos")]
+			mac_power::spawn_observers(app.handle());
 			health::spawn_poll_loop(app.handle().clone());
 
 			// Start the metrics loop (only samples while the popover is visible).

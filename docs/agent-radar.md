@@ -89,51 +89,34 @@ pulls attention even when the popover is shut. Icon precedence puts a service `E
 above waiting; waiting above `Starting`. The count dedups by `(agent, cwd)` and honors
 `ignored_agents`.
 
-**Keeping the badge honest.** The badge and the in-popover dots read the same files
-but the dots apply corrections the raw count used to miss, so a stale `waiting` file
-could badge the tray with no matching row. Two mechanisms now keep them in step:
+**Keeping the badge honest.** The badge and the in-popover dots read the same files,
+and now agree by construction: both key on the session's own `(pid, startedAt)`, so a
+file whose process is gone stops counting immediately and stops being rendered in the
+same pass. There is no reconciliation step and no grace window for a file that names
+its own process — the pair either still exists or it does not.
 
-- **Resume reconcile.** When a popover-open scan sees a session the resume backstop
-  downgraded off `waiting` (its log advanced past the waiting event), it *deletes*
-  that stale `waiting` file (`clear_resumed_waiting`), so the badge stops counting
-  what the rows already hide. It only removes a `waiting` event whose own `ts`
-  predates the resume evidence, so a sibling session still genuinely waiting in the
-  same folder (newer event) is preserved.
-- **PID liveness.** Each scan stamps the live PIDs it resolved per `(agent, cwd)`
-  into `last_agent_pids`; `waiting_count` drops a waiting key whose every stamped PID
-  is dead (`kill(pid, 0)`) — a *crashed-while-waiting* session clears without waiting
-  for the 10-minute dead-session prune.
-- **Orphan sweep.** A `waiting` file whose session died *unscanned* has no stamped
-  PID to test, so it is swept by comparing the state dir against live sessions
-  (`prune_orphan_hook_states` + `live_agent_keys`). That enumeration forks `ps`, and
-  "an agent is waiting on you" is a steady state, not a rare one — so on the always-on
-  poll loop it is rate-limited to once a minute (`PRUNE_INTERVAL_SECS`), while the
-  popover-open path runs it unconditionally on every open and every agent pass. A
-  phantom badge therefore clears within ~a minute in the background, or instantly the
-  moment you open Quay.
+Files written by an older helper carry no identity. Those keep the previous behaviour:
+counted by the badge, swept by `prune_orphan_hook_states` once their `(agent, cwd)` has
+no live session and the 10-minute grace has passed. They are rewritten with an identity
+on the session's next hook event.
 
-Remaining ceilings: PIDs are keyed by `(agent, cwd)`, so a dead waiting session
-sharing a folder with a live sibling still badges until the next popover-open scan;
-`last_agent_pids` is empty after an app restart until the first scan, so a crash then
-reverts to prune-only behavior; and a recycled PID can read alive. All self-heal on a
-popover-open scan.
+All three ceilings this section used to list are gone: sessions are keyed per session
+rather than per `(agent, cwd)`, so a dead one no longer badges on a live sibling's
+behalf; nothing depends on state accumulated since app start, so a crash-and-restart
+behaves like any other moment; and a recycled PID is caught by the start time rather
+than read as alive.
 
-There are two sources for the state, and the better one wins:
+Hooks are the only source of state, and they are authoritative. The agent reports its
+own lifecycle, so working/waiting/idle are exact — including "waiting at a permission
+prompt", which a process scan cannot see at all.
 
-1. **Hooks (authoritative).** With the radar hooks installed for an agent (one
-   click in Settings — below), the agent reports its own lifecycle, so
-   working/waiting/idle are exact — including "waiting at a permission prompt",
-   which `ps` alone cannot see.
-2. **Heuristic (fallback).** Without hooks, "working" is a **recent-activity
-   signal, not proof of work**: a session-log write < 20 s ago **or** the
-   process using > 10 % CPU; anything else is idle. There is no "waiting"
-   without hooks — a permission prompt reads as idle. Per agent:
-   - **Claude Code**: newest `.jsonl` mtime in `~/.claude/projects/<cwd-slug>/`.
-   - **Codex**: newest matching `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-     (by mtime across all date dirs, so sessions started days ago still match).
-   - **Pi**: newest `.jsonl` under `~/.pi/agent/sessions/<cwd-slug>/` (slug
-     inferred from one machine — best effort).
-   - **OpenCode**: CPU only (sessions live in sqlite).
+There used to be a second source: a heuristic that guessed from session-log mtimes and
+CPU use when hooks were not installed. It is gone, along with the readers for
+`~/.claude/projects`, `~/.codex/sessions` and `~/.pi/agent/sessions`. It never produced
+a `waiting` state (a permission prompt read as idle), it could only ever be a
+recent-activity signal rather than proof of work, and reading another app's files to
+produce a guess is what triggers the macOS "access data from other apps" prompt. An
+agent without hooks is now simply not discovered, and the popover says so.
 
 ## Installing the hooks (Settings → Agent radar hooks)
 
@@ -148,10 +131,55 @@ Each agent's config and event mapping:
 
 | Agent | Config Quay writes | Events → state | Waiting? |
 |---|---|---|---|
-| **Claude Code** | `~/.claude/settings.json` | UserPromptSubmit/PostToolUse → working · Notification → waiting · Stop → idle · SessionEnd → ended | yes |
-| **Codex** | `~/.codex/hooks.json` | UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle | yes |
-| **OpenCode** | `~/.config/opencode/plugin/quay.js` | permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
-| **Pi** | `~/.pi/agent/extensions/quay.ts` | agent_start → working · agent_end → idle | no (no permission event) |
+| **Claude Code** | `~/.claude/settings.json` | SessionStart *(startup/resume/clear/fork)* → idle · UserPromptSubmit/PostToolUse/PostToolUseFailure → working · Notification *(filtered)* → waiting · Stop → idle · SessionEnd → ended | yes |
+| **Codex** | `~/.codex/hooks.json` | SessionStart *(startup/resume/clear)* → idle · UserPromptSubmit/PostToolUse → working · PermissionRequest → waiting · Stop → idle · SessionEnd → ended | yes |
+| **OpenCode** | `~/.config/opencode/plugin/quay.js` | session.created → idle · tool.execute.before/permission.replied → working · permission.asked → waiting · session.idle → idle · session.deleted → ended | yes |
+| **Pi** | `~/.pi/agent/extensions/quay.ts` | session_start → idle · agent_start → working · ui_prompt_start → waiting · agent_settled → idle · session_shutdown → ended | yes (any blocking UI prompt) |
+
+**The `Notification` matcher is not optional.** `Notification` is a catch-all that also
+fires for `auth_success`, `quota_auto_resume_fired` and the `elicitation_complete`
+/`elicitation_response` pair. Subscribing to it unfiltered made every one of those a
+waiting agent — an amber row and a tray badge for a session that wanted nothing.
+`idle_prompt` is excluded too: it nudges about a session `Stop` has already marked
+idle, so counting it would badge every finished session a minute after it finished.
+
+**Both agents' `SessionStart` excludes `compact`.** Codex runs `SessionStart` hooks
+matching `source: "compact"` after auto-compaction, *before the next model request* —
+mid-turn — so matching it would blank a working row exactly when the agent is busiest.
+Claude's docs are ambiguous on the same point, and the asymmetry settles it: wrongly
+including `compact` is a visible wrong state, while wrongly excluding it only delays
+discovery until the session's next event.
+
+`clear` (and `fork`, on Claude) *are* included, because either may hand the session a
+new id — and a session id the radar has never seen is one it does not know exists.
+
+`PostToolUseFailure` carries the same `working` signal as `PostToolUse`, which fires
+only on success; without it a session whose tool call errored looked stale until its
+next successful call.
+
+**Pi does have a waiting state after all.** It has no built-in permission prompt — that
+much of the old note was right — but `ui_prompt_start`/`ui_prompt_end` bracket any
+blocking prompt an extension raises (`confirm`, `select`, `input`, `editor`), which is
+exactly "blocked on a question". Where `ui_prompt_end` returns to is decided by
+`ctx.isIdle()`, since a prompt can be raised mid-run or at rest.
+
+**OpenCode's working signal is `tool.execute.before`.** It is bounded — once per tool
+call, like Claude's `PostToolUse` — where `message.updated` fires on every stream chunk
+and would spawn the helper continuously. It does not cover a turn that only thinks and
+never calls a tool, so a short reply can still read idle until `session.idle` confirms
+it. That narrows the CPU-heuristic dependency rather than removing it outright. Its `SessionEnd` carries no matcher: `reason` is always `other` today, and
+omitting it keeps catching whatever Codex adds later. Note that Codex also fires
+`SessionEnd` after 30 minutes of inactivity, so a still-running CLI can lose its hook
+state and fall back to the radar's own view of the process.
+
+Pi reports idle on **`agent_settled`, not `agent_end`** — a run can end and then be
+continued by pi's own retries, compaction or follow-ups, so `agent_end` flashed the row
+idle in the middle of work.
+
+Installed configs are **refreshed on launch** for agents already opted in
+(`hooks_install::refresh_installed`), because what we install changes between versions;
+a corrected matcher would otherwise only reach someone who toggled the hook off and on.
+It never installs for an agent that has none.
 
 `PostToolUse → working` is what clears amber after you approve a permission —
 on approval only the tool runs, no `UserPromptSubmit` fires. The
@@ -159,21 +187,90 @@ OpenCode/Pi files are small plugins that shell out to the same `quay-hook`
 helper, so there is one audited state-writer for every agent.
 
 How the radar consumes it: `quay-hook` writes one small JSON file per session
-(`{ agent, cwd, state, ts }`) under
+(`{ agent, cwd, state, ts }`, plus `name`, `pid`, `startedAt` and `tty` when known) under
 `~/Library/Application Support/am.abhi.quay/agent-state/`, keyed by session and
 tagged with the agent so two agents sharing a folder don't collide. The always-on poll
-reads them (`pollIntervalSec`, independent of `agentIntervalSec`). It trusts **waiting** outright and a **fresh working** (event
-within 5 min); a session-log write newer than a waiting event overrides it (the
-session resumed), a stale working falls back to the heuristic, dead-session
-files are pruned after a 10-minute grace, and corrupt/partial files are dropped
-on read. Writes are atomic (temp + rename), so a mid-write poll never reads
-half a file.
+reads them (`pollIntervalSec`, independent of `agentIntervalSec`). The badge counts
+`waiting` files whose process is still alive; it applies none of the corrections the
+popover rows do, because there are none left to apply — `resolve_state`'s only
+remaining rule is that a `working` older than 5 minutes with no clearing event reads
+idle. Corrupt or partial files are dropped on read. Writes are atomic (temp + rename),
+so a mid-write poll never reads half a file.
+
+### Process identity in the state file
+
+None of the four agents put a pid in their hook payload, which is why sessions were
+keyed by `(agent, cwd)` and why deciding whether one was still alive meant forking
+`ps`. The helper now resolves it itself, without forking — `PostToolUse` fires on
+every tool call, so a `ps` per event was never an option. `libproc`
+(`proc_pidinfo`/`PROC_PIDTBSDINFO`) answers all of it with a syscall:
+
+| Field | Source | Why |
+|---|---|---|
+| `pid` | ancestry walk, or `--pid` | identity and liveness without `ps` |
+| `startedAt` | `pbi_start_tvsec` | **pids are recycled** — `kill(pid, 0)` would report a different process alive under a dead session's number, and after a reboot that is near certain. The `(pid, startedAt)` pair is the identity; the pid alone is not |
+| `tty` | `e_tdev` → `devname(3)` | `sysinfo` cannot report a controlling terminal on macOS at all, and jump-to-session needs one to find the window |
+
+opencode and pi run their adapter *inside* the agent, so they pass `--pid`. Claude and
+codex invoke the helper as a subprocess, so it walks up its own ancestry (up to 8 hops,
+past the shell that ran it) looking for an executable whose basename is that agent.
+
+**It stamps nothing rather than guessing.** If the walk finds no match, the fields are
+omitted and the reader falls back to the old `(agent, cwd)` behaviour. Stamping the
+wrong pid would be worse than none: the shell that ran the hook exits the moment the
+hook does, so a file carrying *its* pid would read as dead immediately and the session
+would vanish from the radar.
+
+All four fields are optional, so a file written by an older helper still parses.
+
+**What consumes them.** Discovery itself, and the always-on badge path.
+
+### Discovery is the set of live state files
+
+A session exists because its agent said so. Each pass:
+
+1. Read `agent-state/*.json`. Delete any whose `(pid, startedAt)` is no longer that
+   process, and any that will not parse.
+2. One `sysinfo` refresh over exactly those pids, for memory and run time.
+3. Build one row **per file** — per session, not per `(agent, cwd)`.
+
+What that removed, per pass: the `ps` fork, a `sysinfo` refresh over every
+tty-attached process on the machine, a second refresh over the candidates, and the
+fixed **200 ms sleep** between them that existed solely so `cpu_usage()` had a delta to
+measure. Also gone: the readers for `~/.claude/projects`, `~/.codex/sessions` and
+`~/.pi/agent/sessions`, and the mtime/CPU heuristic they fed — every session here is
+hooked by definition, so there is no second opinion left to form.
+
+Two consequences worth stating plainly:
+
+- **Sessions are per-session now.** Two Claude sessions in one folder get their own
+  rows, where `(agent, cwd)` keying used to collapse them into one.
+- **An agent with no hooks installed is not discovered at all.** That is the trade the
+  rest of this is built on.
+
+Known gaps, both accepted rather than worked around:
+
+- Codex fires `SessionEnd` after 30 idle minutes even though the CLI is still running,
+  so an untouched Codex session disappears until you type something.
+- OpenCode has no event for a turn that only thinks and never calls a tool, so a short
+  reply reads idle until `session.idle` lands a moment later.
+
+**Liveness on the badge path** uses `(pid, startedAt)` the same way:
+liveness stops being a guess, so a crashed session clears immediately instead of
+sitting out the 10-minute grace, and the `ps` fork that grace existed to avoid is not
+run at all. It is still run, lazily, if a file from an older helper turns up — the
+pruner takes the enumeration unevaluated and only forces it on meeting one.
+
+This is also per-session rather than per-folder: a dead session sharing a folder with
+a live sibling used to keep the tray badge lit, because the coarse `(agent, cwd)` PID
+map could not tell them apart.
 
 ### Manual install (appendix)
 
 The Settings button is the supported path; this is the equivalent by hand, e.g.
-for Claude Code. `quay-hook` takes `<state> [agent]` — the agent defaults to
-`claude` when omitted, so a pre-existing single-arg install keeps working.
+for Claude Code. `quay-hook` takes `<state> [agent] [--pid N]` — the agent defaults to
+`claude` when omitted, so a pre-existing single-arg install keeps working, and `--pid`
+is only for an adapter running inside the agent that already knows it.
 
 ```sh
 cargo build --release --manifest-path src-tauri/Cargo.toml -p quay-hook
@@ -190,7 +287,10 @@ cp src-tauri/target/release/quay-hook ~/.local/bin/quay-hook
       { "matcher": "", "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook working claude", "timeout": 5 }] }
     ],
     "Notification": [
-      { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook waiting claude", "timeout": 5 }] }
+      {
+        "matcher": "permission_prompt|agent_needs_input|elicitation_dialog|elicitation_url_dialog",
+        "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook waiting claude", "timeout": 5 }]
+      }
     ],
     "Stop": [
       { "hooks": [{ "type": "command", "command": "~/.local/bin/quay-hook idle claude", "timeout": 5 }] }

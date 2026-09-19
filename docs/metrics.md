@@ -11,7 +11,7 @@ UI dots and reattachment. Metrics are different — they're only worth anything 
 user is looking at the list. Sampling them continuously would burn CPU (and run `lsof`)
 every few seconds forever, for data nobody sees.
 
-So the metrics loop is gated on `AppState.visible`:
+So the metrics loop is gated on `AppState::wait_active` — popover open *and* a screen to show it on:
 
 - `lib.rs::toggle_popover` sets `visible = true` after a successful `show()`, `false` after
   a successful `hide()`.

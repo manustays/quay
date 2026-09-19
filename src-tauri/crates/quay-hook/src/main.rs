@@ -5,16 +5,23 @@
 //! small file per session under `<data_dir>/am.abhi.quay/agent-state/` that the
 //! radar's 5 s poll reads to distinguish "waiting on you" from plain idle.
 //!
-//! Usage: `quay-hook <working|waiting|idle|ended> [agent]` — the state is the
+//! Usage: `quay-hook <working|waiting|idle|ended> [agent] [--pid N]` — the state is the
 //! argv, mapped from the hook event in the agent's config (Claude Code:
 //! UserPromptSubmit/PostToolUse → working, Notification → waiting, Stop → idle,
 //! SessionEnd → ended). `agent` is one of claude|codex|opencode|pi and
 //! defaults to `claude` when absent (back-compat with configs installed before
 //! multi-agent support). It disambiguates two agents sharing a cwd.
 //!
-//! Standalone std + serde_json + dirs on purpose — importing the app lib would
+//! `--pid` is for agents whose adapter runs *inside* the agent process (opencode,
+//! pi) and therefore already knows it. Claude and codex invoke this as a subprocess
+//! and put no pid in their payload, so it is resolved by walking our own ancestry —
+//! see [`proc_info`].
+//!
+//! Standalone std + serde_json + dirs + libc on purpose — importing the app lib would
 //! link all of tauri into a helper that runs on every hook event.
 //! Always exits 0: a broken helper must never block a Claude Code turn.
+
+use quay_hook::proc_info;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -68,6 +75,15 @@ fn run() -> Option<()> {
 	if !matches!(agent.as_str(), "claude" | "codex" | "opencode" | "pi") {
 		return None;
 	}
+	// The adapter that runs inside the agent knows its own pid; everyone else has to
+	// be found by walking up from here.
+	let args: Vec<String> = std::env::args().collect();
+	let given_pid = args
+		.iter()
+		.position(|a| a == "--pid")
+		.and_then(|i| args.get(i + 1))
+		.and_then(|n| n.parse::<u32>().ok());
+
 	let mut input = String::new();
 	// Hook payloads are small; cap just in case something pipes a transcript.
 	std::io::stdin().take(64 * 1024).read_to_string(&mut input).ok()?;
@@ -103,6 +119,26 @@ fn run() -> Option<()> {
 	let mut obj = serde_json::json!({ "agent": agent, "cwd": cwd, "state": state, "ts": ts });
 	if let Some(n) = &name {
 		obj["name"] = serde_json::Value::String(n.clone());
+	}
+	// Identity of the session's process, when we can establish it honestly.
+	//
+	// `pid` alone is not an identity — pids are recycled, so a liveness check would
+	// report a *different* process alive under a dead session's number, and across a
+	// reboot that is near certain. `startedAt` is what makes the pair identifying.
+	//
+	// All four fields are optional. A reader that finds no `pid` must fall back to
+	// the old `(agent, cwd)` behaviour: configs written by an older helper, and
+	// sessions whose agent we could not positively identify, both land there.
+	if let Some(proc_) = given_pid.and_then(proc_info::info).or_else(|| {
+		proc_info::find_agent(std::process::id(), &agent)
+	}) {
+		obj["pid"] = serde_json::Value::from(proc_.pid);
+		obj["startedAt"] = serde_json::Value::from(proc_.started_at);
+		if let Some(tty) = proc_.tty {
+			// The radar cannot get a controlling terminal from sysinfo on macOS, and
+			// jump-to-session needs one to find the window.
+			obj["tty"] = serde_json::Value::String(tty);
+		}
 	}
 	let body = obj.to_string();
 	// Temp file is per-session too, so parallel hooks for different sessions

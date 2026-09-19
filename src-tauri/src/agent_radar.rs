@@ -13,10 +13,12 @@ use crate::detect;
 use crate::state::AppState;
 use serde::Serialize;
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 use std::time::SystemTime;
 use sysinfo::{
-	MINIMUM_CPU_UPDATE_INTERVAL, Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind,
+	Pid, ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind,
 };
 use tauri::{AppHandle, Manager};
 
@@ -40,10 +42,6 @@ pub struct DiscoveredAgent {
 	#[serde(rename = "sessionName")]
 	pub session_name: Option<String>,
 	pub uptime_sec: u64,
-	/// Per-PID CPU% (may exceed 100 on multi-core).
-	// ponytail: per-PID only, no child-subtree sum; metrics::aggregate_tree is
-	// the upgrade if the numbers look too small.
-	pub cpu_percent: f32,
 	pub memory_bytes: u64,
 	/// "waiting" (hook-reported: session blocked on the user), "working"
 	/// (hook-reported turn in progress, or — with no hooks — a recent
@@ -58,34 +56,17 @@ pub struct DiscoveredAgent {
 	pub jump_supported: bool,
 }
 
-/// How a session's active/idle state (and name, where possible) is derived.
-enum Activity {
-	/// Newest `.jsonl` under `~/.claude/projects/<claude_slug(cwd)>/`; its
-	/// mtime is the activity signal and its first user prompt the name.
-	ClaudeJsonl,
-	/// Newest `.jsonl` mtime under `~/.pi/agent/sessions/<pi_slug(cwd)>/`.
-	/// No session name on disk.
-	PiJsonl,
-	/// Newest `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` whose
-	/// `session_meta` cwd matches; mtime is the activity signal and the
-	/// indexed `thread_name` the session name.
-	CodexRollout,
-	/// CPU-only heuristic (opencode stores sessions in sqlite).
-	// ponytail: `lsof -p <pid>` mapping the open db is the upgrade.
-	Cpu,
-}
 
 struct AgentDef {
 	kind: &'static str,
 	bin: &'static str,
-	activity: Activity,
 }
 
 const AGENTS: &[AgentDef] = &[
-	AgentDef { kind: "claude", bin: "claude", activity: Activity::ClaudeJsonl },
-	AgentDef { kind: "codex", bin: "codex", activity: Activity::CodexRollout },
-	AgentDef { kind: "opencode", bin: "opencode", activity: Activity::Cpu },
-	AgentDef { kind: "pi", bin: "pi", activity: Activity::PiJsonl },
+	AgentDef { kind: "claude", bin: "claude" },
+	AgentDef { kind: "codex", bin: "codex" },
+	AgentDef { kind: "opencode", bin: "opencode" },
+	AgentDef { kind: "pi", bin: "pi" },
 ];
 
 /// Identify an agent session from its argv. Pure.
@@ -302,305 +283,20 @@ pub fn herdr_client_pid() -> Option<u32> {
 	pids.first().copied()
 }
 
-/// Claude Code project-dir slug: every non-alphanumeric char → `-`.
-/// Verified: `/Users/abhi/DEV/abhi_github/abhi.page.11ty` →
-/// `-Users-abhi-DEV-abhi-github-abhi-page-11ty`.
-// ponytail: built from the raw sysinfo cwd; a symlinked//private/var path may
-// miss the session dir, degrading gracefully to the CPU signal.
-fn claude_slug(cwd: &str) -> String {
-	cwd.chars().map(|c| if c.is_ascii_alphanumeric() { c } else { '-' }).collect()
-}
 
-/// Pi session-dir slug: `/` → `-` (other chars kept), wrapped as `-<…>--`.
-/// Verified against one real dir: `/Users/abhi/DEV/eko_github/wlc-webapp` →
-/// `--Users-abhi-DEV-eko_github-wlc-webapp--`.
-// ponytail: inferred from a single sample; on mismatch the state degrades to
-// the CPU signal automatically.
-fn pi_slug(cwd: &str) -> String {
-	format!("-{}--", cwd.replace('/', "-"))
-}
 
-/// Newest `.jsonl` (path + mtime) in `dir`, non-recursive. None when the dir
-/// is missing or holds no `.jsonl` — the caller degrades to the CPU signal.
-fn newest_jsonl(dir: &Path) -> Option<(PathBuf, SystemTime)> {
-	std::fs::read_dir(dir)
-		.ok()?
-		.flatten()
-		.filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-		.filter_map(|e| {
-			let mtime = e.metadata().ok()?.modified().ok()?;
-			Some((e.path(), mtime))
-		})
-		.max_by_key(|&(_, m)| m)
-}
 
-/// First real user prompt in a Claude Code session log — the closest thing
-/// to a session title on disk. Skips meta entries, tool-result-only user
-/// messages, and slash-command envelopes (`<command-name>…`). Pure.
-fn first_user_prompt(jsonl: &str) -> Option<String> {
-	for line in jsonl.lines() {
-		let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-		if v["type"] != "user" || v["isMeta"] == true {
-			continue;
-		}
-		let content = &v["message"]["content"];
-		let text = if let Some(s) = content.as_str() {
-			s
-		} else if let Some(blocks) = content.as_array() {
-			let text_block = blocks
-				.iter()
-				.find_map(|b| if b["type"] == "text" { b["text"].as_str() } else { None });
-			match text_block {
-				Some(t) => t,
-				None => continue, // tool_result-only user entry
-			}
-		} else {
-			continue;
-		};
-		let text = text.trim();
-		if text.is_empty() || text.starts_with('<') {
-			continue;
-		}
-		return Some(truncate_label(text));
-	}
-	None
-}
 
-/// Cap a session label at 80 chars (char-boundary safe) with an ellipsis.
-fn truncate_label(text: &str) -> String {
-	let mut label: String = text.chars().take(80).collect();
-	if label.len() < text.len() {
-		label.push('…');
-	}
-	label
-}
 
-/// Parse a codex rollout file's first `session_meta` line → (cwd, session id).
-/// Pure; None for anything that isn't a session_meta with both fields.
-fn rollout_meta(line: &str) -> Option<(String, String)> {
-	let v: serde_json::Value = serde_json::from_str(line).ok()?;
-	if v["type"] != "session_meta" {
-		return None;
-	}
-	let p = &v["payload"];
-	let cwd = p["cwd"].as_str()?.to_string();
-	let id = p["id"].as_str().or_else(|| p["session_id"].as_str())?.to_string();
-	Some((cwd, id))
-}
 
-/// Look up a codex session id's `thread_name` in `session_index.jsonl` text.
-/// Last matching line wins (names get regenerated over time). Pure.
-fn thread_name_for(index: &str, id: &str) -> Option<String> {
-	let mut name = None;
-	for line in index.lines() {
-		let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-		if v["id"] == id {
-			if let Some(n) = v["thread_name"].as_str() {
-				name = Some(truncate_label(n));
-			}
-		}
-	}
-	name
-}
 
-/// Re-read `~/.codex/session_index.jsonl` only when its `(len, mtime)` moved. The
-/// file is appended to as threads are created, so a stamp comparison is enough, and
-/// an unchanged index costs one `stat` instead of reading the whole file every pass.
-fn refresh_codex_index(home: &Path, cache: &mut Option<(u64, SystemTime, String)>) {
-	let path = home.join(".codex/session_index.jsonl");
-	let Ok(meta) = std::fs::metadata(&path) else {
-		*cache = None;
-		return;
-	};
-	let stamp = (meta.len(), meta.modified().unwrap_or(SystemTime::UNIX_EPOCH));
-	if cache.as_ref().is_some_and(|(len, mtime, _)| (*len, *mtime) == stamp) {
-		return;
-	}
-	*cache = std::fs::read_to_string(&path).ok().map(|text| (stamp.0, stamp.1, text));
-}
 
-/// All codex rollout files as (cwd, session id, mtime), walking every
-/// `~/.codex/sessions/YYYY/MM/DD/` dir. The `session_meta` first line is
-/// immutable, so it's cached by path across passes; only mtimes are re-read.
-/// A long-running session's rollout lives under its *start* date — selection
-/// is by mtime, never by directory recency.
-fn codex_rollouts(
-	home: &Path,
-	meta_cache: &mut HashMap<PathBuf, Option<(String, String)>>,
-) -> Vec<(String, String, SystemTime)> {
-	fn subdirs(dir: &Path) -> Vec<PathBuf> {
-		std::fs::read_dir(dir)
-			.map(|rd| rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()).collect())
-			.unwrap_or_default()
-	}
-	let mut out = Vec::new();
-	for year in subdirs(&home.join(".codex/sessions")) {
-		for month in subdirs(&year) {
-			for day in subdirs(&month) {
-				let Ok(rd) = std::fs::read_dir(&day) else { continue };
-				for entry in rd.flatten() {
-					let path = entry.path();
-					if path.extension().is_none_or(|x| x != "jsonl") {
-						continue;
-					}
-					let meta = meta_cache
-						.entry(path.clone())
-						.or_insert_with(|| {
-							// Only the first line is needed; rollouts can be MBs.
-							let mut head = String::new();
-							use std::io::BufRead;
-							if let Ok(f) = std::fs::File::open(&path) {
-								let _ = std::io::BufReader::new(f).read_line(&mut head);
-							}
-							rollout_meta(&head)
-						})
-						.clone();
-					let Some((cwd, id)) = meta else { continue };
-					let Some(mtime) = entry.metadata().ok().and_then(|m| m.modified().ok())
-					else {
-						continue;
-					};
-					out.push((cwd, id, mtime));
-				}
-			}
-		}
-	}
-	out
-}
 
-/// Per-cwd session signal: newest log mtime + best-effort session name.
-struct SessionInfo {
-	mtime: Option<SystemTime>,
-	name: Option<String>,
-}
 
-/// Resolve the session signal for one agent candidate. Every miss degrades
-/// gracefully: no mtime → CPU-only activity, no name → None.
-fn session_info(
-	def: &AgentDef,
-	home: &Path,
-	cwd: &str,
-	codex: &[(String, String, SystemTime)],
-	codex_index: &str,
-	claude_names: &mut HashMap<PathBuf, String>,
-) -> SessionInfo {
-	match def.activity {
-		Activity::ClaudeJsonl => {
-			let dir = home.join(".claude/projects").join(claude_slug(cwd));
-			let Some((path, mtime)) = newest_jsonl(&dir) else {
-				return SessionInfo { mtime: None, name: None };
-			};
-			// The name comes from a bounded head read (the first user prompt sits in
-			// the first few entries; the log itself can be many MBs) and never changes
-			// once written — so cache it by path. A *miss* is not cached: the log
-			// exists from the moment the session starts, before any prompt.
-			let name = match claude_names.get(&path) {
-				Some(cached) => Some(cached.clone()),
-				None => {
-					let found =
-						read_head(&path, 256 * 1024).as_deref().and_then(first_user_prompt);
-					if let Some(n) = &found {
-						claude_names.insert(path.clone(), n.clone());
-					}
-					found
-				}
-			};
-			SessionInfo { mtime: Some(mtime), name }
-		}
-		Activity::PiJsonl => {
-			let dir = home.join(".pi/agent/sessions").join(pi_slug(cwd));
-			SessionInfo { mtime: newest_jsonl(&dir).map(|(_, m)| m), name: None }
-		}
-		Activity::CodexRollout => {
-			let newest = codex
-				.iter()
-				.filter(|(c, _, _)| c == cwd)
-				.max_by_key(|&&(_, _, m)| m);
-			match newest {
-				Some((_, id, mtime)) => SessionInfo {
-					mtime: Some(*mtime),
-					name: thread_name_for(codex_index, id),
-				},
-				None => SessionInfo { mtime: None, name: None },
-			}
-		}
-		Activity::Cpu => SessionInfo { mtime: None, name: None },
-	}
-}
 
-/// Resolve one candidate's (state, session name), the single gate that decides
-/// whether the agent's own log/session files are read.
-///
-/// When a hook state exists for the `(agent, cwd)` — i.e. the user installed
-/// hooks and the session has emitted at least one event — it is authoritative:
-/// state comes from the hook (CPU still fuels the stale-`working` fallback; no
-/// log mtime, so a hooked `waiting` isn't mtime-downgraded — a resumed session
-/// re-emits `working`, which clears it), the name comes from the hook, and
-/// `session_info` is **never called**, so `~/.claude`/`~/.codex`/`~/.pi` stay
-/// untouched (no macOS "access data from other apps" prompt). Only a candidate
-/// with no hook state falls back to reading its session files.
-// ponytail: dropping the log-mtime resume backstop means a missed clearing hook
-// can pin a row `waiting` until the next event or the prune grace — acceptable
-// since a resumed hooked session emits `working` immediately. Upgrade path is a
-// pid in the hook payload for per-session attribution.
-fn resolve_agent(
-	def: &AgentDef,
-	hook: Option<&HookState>,
-	home: &Path,
-	cwd: &str,
-	cpu_percent: f32,
-	codex: &[(String, String, SystemTime)],
-	codex_index: &str,
-	now: SystemTime,
-	claude_names: &mut HashMap<PathBuf, String>,
-) -> (&'static str, Option<String>) {
-	if let Some(h) = hook {
-		return (resolve_state(Some(h), None, cpu_percent, now), h.name.clone());
-	}
-	let session = session_info(def, home, cwd, codex, codex_index, claude_names);
-	(resolve_state(None, session.mtime, cpu_percent, now), session.name)
-}
 
-/// Read up to `cap` bytes from the start of a file as (lossy) UTF-8.
-fn read_head(path: &Path, cap: usize) -> Option<String> {
-	use std::io::Read;
-	let mut buf = vec![0u8; cap];
-	let mut f = std::fs::File::open(path).ok()?;
-	let mut filled = 0;
-	while filled < cap {
-		match f.read(&mut buf[filled..]) {
-			Ok(0) => break,
-			Ok(n) => filled += n,
-			Err(_) => return None,
-		}
-	}
-	buf.truncate(filled);
-	Some(String::from_utf8_lossy(&buf).into_owned())
-}
 
-/// Active = a session-log write in the last 20 s, or busy CPU. Pure given a
-/// clock reading.
-// ponytail: the mtime is cwd-keyed, so two sessions sharing a cwd both read
-// active when either writes; per-session attribution via lsof is the upgrade.
-fn is_active(log_mtime: Option<SystemTime>, cpu_percent: f32, now: SystemTime) -> bool {
-	let recent_write = log_mtime
-		.and_then(|m| now.duration_since(m).ok())
-		.is_some_and(|age| age.as_secs() < 20);
-	recent_write || cpu_percent > 10.0
-}
 
-/// One hook-reported session state, written by `quay-hook` (see
-/// `crates/quay-hook/src/main.rs`): the mapped state string and the event time as unix
-/// seconds. Keyed externally by (agent, cwd).
-struct HookState {
-	state: String,
-	ts: SystemTime,
-	/// Session name the hook captured (the submitted prompt) — lets a hooked
-	/// session be labelled without reading the agent's own log files. `None`
-	/// for agents whose hook can't supply one (opencode/pi) or before the
-	/// first prompt lands.
-	name: Option<String>,
-}
 
 /// Grace before a hook-state file whose (agent, cwd) has no live session is
 /// deleted — long enough to ride out a transient cwd-resolution miss, short
@@ -612,124 +308,24 @@ const HOOK_PRUNE_GRACE_SECS: u64 = 600;
 /// missed Stop/idle hook from pinning a row green forever.
 const WORKING_STALE_SECS: u64 = 300;
 
-/// Read `agent-state/*.json` into (agent, cwd) → strongest state. Keying by
-/// agent as well as cwd keeps a claude and a codex session in the same folder
-/// from clobbering each other. Precedence per key: waiting > working > idle
-/// (matches the folder-clubbing UX — one amber member makes the folder need
-/// you). Files whose (agent, cwd) has no live session and whose event is older
-/// than the grace window are pruned in the same walk. A missing `agent` field
-/// (pre-agent-field state files / older installed helpers) defaults to claude.
-// ponytail: (agent, cwd)-keyed — two sessions of the SAME agent in one folder
-// still share state (waiting wins per precedence); per-session attribution
-// needs a pid in the hook payload, which the agents don't provide.
-fn hook_states(
-	dir: &Path,
-	live: &[(&str, &str)],
-	now: SystemTime,
-) -> HashMap<(String, String), HookState> {
-	let mut out: HashMap<(String, String), HookState> = HashMap::new();
-	// Name is merged independently of state precedence: the newest-named session
-	// wins, so a nameless `waiting` file can't hide a named sibling's label.
-	let mut names: HashMap<(String, String), (String, SystemTime)> = HashMap::new();
-	let Ok(rd) = std::fs::read_dir(dir) else { return out };
-	let rank = |s: &str| match s {
-		"waiting" => 2,
-		"working" => 1,
-		_ => 0,
-	};
-	for entry in rd.flatten() {
-		let path = entry.path();
-		if path.extension().is_none_or(|x| x != "json") {
-			continue;
-		}
-		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
-			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
-			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((
-				agent,
-				v["cwd"].as_str()?.to_string(),
-				v["state"].as_str()?.to_string(),
-				v["ts"].as_u64()?,
-				v["name"].as_str().map(str::to_string),
-			))
-		});
-		let Some((agent, cwd, state, ts, name)) = parsed else {
-			let _ = std::fs::remove_file(&path); // corrupt/partial: drop it
-			continue;
-		};
-		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
-		let age = now.duration_since(ts).unwrap_or_default().as_secs();
-		if !live.contains(&(agent.as_str(), cwd.as_str())) {
-			if age > HOOK_PRUNE_GRACE_SECS {
-				let _ = std::fs::remove_file(&path);
-			}
-			continue;
-		}
-		let key = (agent, cwd);
-		if let Some(n) = name {
-			if names.get(&key).is_none_or(|(_, t)| ts >= *t) {
-				names.insert(key.clone(), (n, ts));
-			}
-		}
-		let stronger = out
-			.get(&key)
-			.is_none_or(|cur| rank(&state) > rank(&cur.state) || (rank(&state) == rank(&cur.state) && ts > cur.ts));
-		if stronger {
-			out.insert(key, HookState { state, ts, name: None });
-		}
-	}
-	for (key, (n, _)) in names {
-		if let Some(hs) = out.get_mut(&key) {
-			hs.name = Some(n);
-		}
-	}
-	out
-}
 
-/// Three-way session state: "waiting" / "working" / "idle". Pure.
+/// Three-way session state from what the hook last reported. Pure.
 ///
-/// The hook's "waiting" wins — unless the session log was written *after* the
-/// hook event (the session resumed but no clearing hook has landed yet, e.g.
-/// hooks were unregistered mid-session); then the heuristic decides. A fresh
-/// hook "working" (event within `WORKING_STALE_SECS`) shows working directly.
-/// Everything else — no hooks, a stale working, or a hook "idle" — falls to the
-/// mtime/CPU heuristic, whose busy signal now reads as "working" too. So with
-/// hooks uninstalled the behavior is exactly the old active/idle, renamed.
-fn resolve_state(
-	hook: Option<&HookState>,
-	log_mtime: Option<SystemTime>,
-	cpu_percent: f32,
-	now: SystemTime,
-) -> &'static str {
-	if let Some(h) = hook {
-		if h.state == "waiting" {
-			let resumed = log_mtime
-				.is_some_and(|m| m > h.ts + std::time::Duration::from_secs(2));
-			if !resumed {
-				return "waiting";
-			}
-		} else if h.state == "working" {
-			let fresh = now.duration_since(h.ts).unwrap_or_default().as_secs() <= WORKING_STALE_SECS;
-			if fresh {
-				return "working";
-			}
+/// The hook is authoritative: it is now also what discovers the session, so there is
+/// no second opinion to weigh it against. The one correction left is staleness — a
+/// `working` that has gone quiet for `WORKING_STALE_SECS` with no clearing event is a
+/// missed hook rather than a turn that has genuinely run that long, and pinning a row
+/// green forever is worse than showing it idle a little early.
+fn resolve_state(state: &str, ts: SystemTime, now: SystemTime) -> &'static str {
+	match state {
+		"waiting" => "waiting",
+		"working" if now.duration_since(ts).unwrap_or_default().as_secs() <= WORKING_STALE_SECS => {
+			"working"
 		}
+		_ => "idle",
 	}
-	if is_active(log_mtime, cpu_percent, now) { "working" } else { "idle" }
 }
 
-/// True if `pid` names a live process right now. `kill(pid, 0)` sends no signal —
-/// it only runs the existence/permission check: `0` = alive and ours, `EPERM` =
-/// alive but another user's, `ESRCH` = no such process. Cheap (no `ps`).
-// ponytail: can't tell a recycled pid from the original, so a crashed waiting
-// session whose pid got reused reads as alive until the popover-open scan
-// reconciles its file — same class of ceiling as the cwd-keyed collapse. Upgrade
-// path is `matches_identity`, but that needs a sysinfo pass this path avoids.
-fn pid_alive(pid: u32) -> bool {
-	// SAFETY: signal 0 performs only permission/existence checks, no delivery.
-	let rc = unsafe { libc::kill(pid as libc::pid_t, 0) };
-	rc == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
-}
 
 /// Count of distinct waiting agent `(agent, cwd)` pairs from the hook-state files —
 /// the always-on menubar signal. Unlike [`hook_states`] this does **no** `ps` scan;
@@ -751,11 +347,7 @@ fn pid_alive(pid: u32) -> bool {
 // session sharing a folder with a live sibling still badges (can't attribute the
 // waiting file to a pid without the lsof/identity work this cheap path skips). It
 // self-heals on the next popover-open scan; upgrade path is a pid in the hook payload.
-pub fn waiting_count(
-	dir: &Path,
-	ignored: &[crate::model::IgnoredAgent],
-	pids: &HashMap<(String, String), HashSet<u32>>,
-) -> usize {
+pub fn waiting_count(dir: &Path, ignored: &[crate::model::IgnoredAgent]) -> usize {
 	let Ok(rd) = std::fs::read_dir(dir) else { return 0 };
 	let mut keys: HashSet<(String, String)> = HashSet::new();
 	for entry in rd.flatten() {
@@ -766,24 +358,45 @@ pub fn waiting_count(
 		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
 			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
 			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string()))
+			Some((
+				agent,
+				v["cwd"].as_str()?.to_string(),
+				v["state"].as_str()?.to_string(),
+				recorded_identity(&v),
+			))
 		});
-		let Some((agent, cwd, state)) = parsed else { continue };
+		let Some((agent, cwd, state, identity)) = parsed else { continue };
 		if state != "waiting" {
 			continue;
 		}
 		if ignored.iter().any(|i| i.agent == agent && i.cwd == cwd) {
 			continue;
 		}
-		// Scanned and every PID for the key is dead → crashed/exited session, skip.
-		if let Some(seen) = pids.get(&(agent.clone(), cwd.clone())) {
-			if !seen.is_empty() && !seen.iter().any(|&p| pid_alive(p)) {
-				continue;
+		match identity {
+			// The file names its own process, so liveness is exact and per-session:
+			// no `ps`, and a dead sibling in a shared folder no longer badges.
+			Some((pid, started_at)) => {
+				if !quay_hook::proc_info::is_same_process(pid, started_at) {
+					continue;
+				}
 			}
+			// Written by an older helper, so there is nothing to check it against —
+			// count it. It is rewritten with an identity on the session's next event,
+			// and `prune_orphan_hook_states` still sweeps it on the legacy path.
+			None => {}
 		}
 		keys.insert((agent, cwd));
 	}
 	keys.len()
+}
+
+/// The `(pid, startedAt)` a hook state file names, when it has one.
+///
+/// Both or neither: a pid without its start time is exactly the ambiguous liveness
+/// check this pair exists to replace, so a half-written file is treated as legacy.
+fn recorded_identity(v: &serde_json::Value) -> Option<(u32, u64)> {
+	let pid = v["pid"].as_u64()?.try_into().ok()?;
+	Some((pid, v["startedAt"].as_u64()?))
 }
 
 /// Live `(agent, cwd)` keys right now — tty-attached agent processes with a
@@ -828,8 +441,14 @@ pub fn live_agent_keys(ignored: &[crate::model::IgnoredAgent]) -> HashSet<(Strin
 /// [`hook_states`] / [`waiting_count`], so the always-on path doesn't change their
 /// handling), and the grace rides out a transient cwd-resolution miss the same way
 /// `hook_states` does. Pure — no process enumeration — so it unit-tests headlessly.
-pub fn prune_orphan_hook_states(dir: &Path, live: &HashSet<(String, String)>, now: SystemTime) {
+pub fn prune_orphan_hook_states(
+	dir: &Path,
+	live: impl Fn() -> HashSet<(String, String)>,
+	now: SystemTime,
+) {
 	let Ok(rd) = std::fs::read_dir(dir) else { return };
+	// Only materialised if a legacy file turns up, because producing it forks `ps`.
+	let mut legacy_live: Option<HashSet<(String, String)>> = None;
 	for entry in rd.flatten() {
 		let path = entry.path();
 		if path.extension().is_none_or(|x| x != "json") {
@@ -838,10 +457,28 @@ pub fn prune_orphan_hook_states(dir: &Path, live: &HashSet<(String, String)>, no
 		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
 			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
 			let agent = v["agent"].as_str().unwrap_or("claude").to_string();
-			Some((agent, v["cwd"].as_str()?.to_string(), v["state"].as_str()?.to_string(), v["ts"].as_u64()?))
+			Some((
+				agent,
+				v["cwd"].as_str()?.to_string(),
+				v["state"].as_str()?.to_string(),
+				v["ts"].as_u64()?,
+				recorded_identity(&v),
+			))
 		});
-		let Some((agent, cwd, state, ts)) = parsed else { continue };
-		if state != "waiting" || live.contains(&(agent.clone(), cwd.clone())) {
+		let Some((agent, cwd, state, ts, identity)) = parsed else { continue };
+		if state != "waiting" {
+			continue;
+		}
+		// A file that names its own process needs no grace and no enumeration: the
+		// (pid, start-time) pair either still exists or it does not.
+		if let Some((pid, started_at)) = identity {
+			if !quay_hook::proc_info::is_same_process(pid, started_at) {
+				let _ = std::fs::remove_file(&path);
+			}
+			continue;
+		}
+		let live = legacy_live.get_or_insert_with(&live);
+		if live.contains(&(agent.clone(), cwd.clone())) {
 			continue;
 		}
 		let ts = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts);
@@ -879,192 +516,160 @@ pub fn matches_identity(pid: u32, agent: &str, cwd: &str) -> bool {
 		&& proc_.cwd().is_some_and(|c| c.to_string_lossy() == cwd)
 }
 
-/// One scan pass: list tty PIDs, resolve the agent candidates among them, and
-/// return the snapshot to emit. Rows are rebuilt from scratch every pass (a
-/// PID gone between `ps` and the sysinfo refresh is simply skipped) and
-/// sorted by pid so rows don't jump between passes.
-/// Cross-pass caches owned by the radar loop (`scanner::spawn_scan_loop`).
-///
-/// Every entry is keyed on something that cannot change behind our back, or carries
-/// the stamp it was read at — a cache that can go stale would show a wrong session
-/// name for as long as the app runs.
-#[derive(Default)]
-pub struct ScanCaches {
-	/// Codex rollout `session_meta` first lines, by path. Immutable once written.
-	pub codex_meta: HashMap<PathBuf, Option<(String, String)>>,
-	/// Claude session names by log path. **Successes only** — a log can exist before
-	/// its first user prompt is written, and caching that miss would hide the name
-	/// for the life of the process.
-	pub claude_names: HashMap<PathBuf, String>,
-	/// `~/.codex/session_index.jsonl` with the `(len, mtime)` it was read at, so an
-	/// appended index is re-read and an unchanged one costs a single `stat`.
-	pub codex_index: Option<(u64, SystemTime, String)>,
+
+/// The `&'static str` agent kind for a name out of a state file, or `None` if the
+/// file names an agent this build does not know.
+fn agent_kind(name: &str) -> Option<&'static str> {
+	AGENTS.iter().find(|a| a.kind == name).map(|a| a.kind)
 }
 
-pub fn scan(app: &AppHandle, caches: &mut ScanCaches) -> Vec<DiscoveredAgent> {
-	let ps = ps_snapshot();
-	let tty: HashMap<u32, &str> = ps
-		.iter()
-		.filter_map(|(&pid, p)| Some((pid, p.tty.as_deref()?)))
-		.collect();
-	if tty.is_empty() {
-		return Vec::new();
-	}
+/// A focusable host terminal among `pid`'s ancestors, walked without forking.
+///
+/// Terminal.app, iTerm and Ghostty publish no environment variable identifying
+/// themselves, so ancestry is the only way to recognise them — see [`ANCESTRY_HOSTS`].
+fn ancestry_host(pid: u32) -> Option<JumpTarget> {
+	quay_hook::proc_info::ancestor_exes(pid, 20).iter().find_map(|exe| {
+		ANCESTRY_HOSTS.iter().find(|(marker, _)| exe.contains(marker)).map(|(_, t)| t.clone())
+	})
+}
 
-	// Ignored agent+cwd pairs, snapshotted under a short lock (like the port
-	// radar's settings snapshot) before any resolution work.
-	let ignored: Vec<crate::model::IgnoredAgent> = {
+/// One live session, as its hook state file describes it.
+///
+/// Discovery is the set of these files, not a process scan: the agents report their
+/// own sessions, so the radar no longer infers them from tty-attached processes.
+struct Session {
+	agent: String,
+	cwd: String,
+	state: String,
+	ts: SystemTime,
+	name: Option<String>,
+	pid: u32,
+	tty: String,
+}
+
+/// Every hook state file whose process is still the one that wrote it.
+///
+/// Deletes the files that fail that check. A file with no recorded `(pid, startedAt)`
+/// was written by an older helper and is skipped rather than deleted: it will be
+/// rewritten with one on the session's next event, and the always-on badge path still
+/// honours it in the meantime.
+fn live_sessions(
+	dir: &Path,
+	ignored: &[crate::model::IgnoredAgent],
+) -> Vec<Session> {
+	let Ok(rd) = std::fs::read_dir(dir) else { return Vec::new() };
+	let mut out = Vec::new();
+	for entry in rd.flatten() {
+		let path = entry.path();
+		if path.extension().is_none_or(|x| x != "json") {
+			continue;
+		}
+		let parsed = std::fs::read_to_string(&path).ok().and_then(|text| {
+			let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+			Some((
+				v["agent"].as_str().unwrap_or("claude").to_string(),
+				v["cwd"].as_str()?.to_string(),
+				v["state"].as_str()?.to_string(),
+				v["ts"].as_u64()?,
+				v["name"].as_str().map(str::to_string),
+				v["tty"].as_str().unwrap_or_default().to_string(),
+				recorded_identity(&v),
+			))
+		});
+		let Some((agent, cwd, state, ts, name, tty, identity)) = parsed else {
+			let _ = std::fs::remove_file(&path); // corrupt/partial: drop it
+			continue;
+		};
+		let Some((pid, started_at)) = identity else { continue };
+		if !quay_hook::proc_info::is_same_process(pid, started_at) {
+			// The session that wrote this is gone, and the pair says so exactly —
+			// no grace window, no process enumeration.
+			let _ = std::fs::remove_file(&path);
+			continue;
+		}
+		if ignored.iter().any(|i| i.agent == agent && i.cwd == cwd) {
+			continue;
+		}
+		out.push(Session {
+			agent,
+			cwd,
+			state,
+			ts: SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(ts),
+			name,
+			pid,
+			tty,
+		});
+	}
+	out
+}
+
+pub fn scan(app: &AppHandle) -> Vec<DiscoveredAgent> {
+	let (ignored, state_dir) = {
 		let state = app.state::<AppState>();
 		let cfg = state.config.lock().unwrap();
-		cfg.settings.ignored_agents.clone()
+		(cfg.settings.ignored_agents.clone(), state.dir.join("agent-state"))
 	};
-
-	let mut sys = System::new();
-	let sys_pids: Vec<Pid> = tty.keys().map(|&p| Pid::from_u32(p)).collect();
-	// Candidate selection below reads only argv and cwd. `environ` is the expensive
-	// part of a refresh and is consumed solely for `jump_supported`, so it is left to
-	// the second pass over the handful of PIDs that turned out to be agents — not
-	// every tty-attached process on the machine.
-	let refresh = ProcessRefreshKind::nothing()
-		.with_cmd(UpdateKind::Always)
-		.with_cwd(UpdateKind::Always)
-		.with_cpu()
-		.with_memory();
-	sys.refresh_processes_specifics(ProcessesToUpdate::Some(&sys_pids), true, refresh);
-
-	// Candidates: tty-attached agent processes with a resolvable cwd (macOS
-	// can refuse cwd for privileged processes; those can't be named or given
-	// an activity dir, so they're dropped rather than shown as junk rows).
-	let candidates: Vec<(u32, &'static AgentDef, String)> = sys_pids
-		.iter()
-		.filter_map(|&pid| {
-			let proc_ = sys.process(pid)?;
-			let argv: Vec<String> =
-				proc_.cmd().iter().map(|a| a.to_string_lossy().into_owned()).collect();
-			let def = agent_from_argv(&argv)?;
-			let cwd = proc_.cwd()?.to_string_lossy().into_owned();
-			if ignored.iter().any(|i| i.agent == def.kind && i.cwd == cwd) {
-				return None;
-			}
-			Some((pid.as_u32(), def, cwd))
-		})
-		.collect();
-	if candidates.is_empty() {
+	let sessions = live_sessions(&state_dir, &ignored);
+	if sessions.is_empty() {
 		return Vec::new();
 	}
 
-	// Second targeted refresh so cpu_usage() has a valid delta to measure — and the
-	// only place `environ` (supacode jump coordinates) is read.
-	std::thread::sleep(MINIMUM_CPU_UPDATE_INTERVAL);
-	let cand_pids: Vec<Pid> = candidates.iter().map(|&(p, _, _)| Pid::from_u32(p)).collect();
+	// One refresh, over exactly the sessions we already know about — no `ps`, no
+	// sweep of every tty-attached process, and no second pass. `cpu_usage()` was the
+	// only thing that needed a second pass (and the 200 ms sleep between them, to
+	// have a delta to measure); memory and run time are readable from one.
+	let mut sys = System::new();
+	let sys_pids: Vec<Pid> = sessions.iter().map(|s| Pid::from_u32(s.pid)).collect();
 	sys.refresh_processes_specifics(
-		ProcessesToUpdate::Some(&cand_pids),
+		ProcessesToUpdate::Some(&sys_pids),
 		true,
-		refresh.with_environ(UpdateKind::Always),
+		ProcessRefreshKind::nothing().with_memory().with_environ(UpdateKind::Always),
 	);
 
-	let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
 	let now = SystemTime::now();
-
-	// Hook-reported states (quay-hook, any agent whose hooks are installed) —
-	// read once per pass; same walk prunes files for sessions that are gone.
-	let live: Vec<(&str, &str)> = candidates
-		.iter()
-		.map(|(_, d, cwd)| (d.kind, cwd.as_str()))
-		.collect();
-	let state_dir = app.state::<AppState>().dir.join("agent-state");
-	let hooks = hook_states(&state_dir, &live, now);
-
-	// Codex rollout inventory + name index, built once per pass and only when a
-	// codex session that is NOT hook-covered is on screen — a hooked codex
-	// session gets its state/name from the hook, so `.codex` is never read.
-	let has_codex = candidates.iter().any(|(_, d, cwd)| {
-		matches!(d.activity, Activity::CodexRollout)
-			&& !hooks.contains_key(&(d.kind.to_string(), cwd.clone()))
-	});
-	let codex = if has_codex {
-		refresh_codex_index(&home, &mut caches.codex_index);
-		codex_rollouts(&home, &mut caches.codex_meta)
-	} else {
-		Vec::new()
-	};
-	// Disjoint field borrows: the name cache is written during resolution while the
-	// index is only read from.
-	let claude_names = &mut caches.claude_names;
-	let codex_index: &str = if has_codex {
-		caches.codex_index.as_ref().map(|(_, _, t)| t.as_str()).unwrap_or_default()
-	} else {
-		""
-	};
 	// Manifest name + stack, deduped per pass: rows commonly share a cwd. Not cached
 	// across passes — a manifest can be edited or created while Quay is open, and the
 	// per-pass dedup already removes the repeated reads.
 	let mut manifests: HashMap<String, (String, Option<String>)> = HashMap::new();
 
-	let mut out: Vec<DiscoveredAgent> = candidates
-		.into_iter()
-		.filter_map(|(pid, def, cwd)| {
-			let proc_ = sys.process(Pid::from_u32(pid))?;
-			let cpu_percent = proc_.cpu_usage();
-			// resolve_agent reads the agent's session files only when this
-			// (agent, cwd) has no hook state — so a hooked session never trips
-			// the macOS "access data from other apps" prompt.
-			let hook = hooks.get(&(def.kind.to_string(), cwd.clone()));
-			let (state, session_name) = resolve_agent(
-				def,
-				hook,
-				&home,
-				&cwd,
-				cpu_percent,
-				&codex,
-				codex_index,
-				now,
-				claude_names,
-			);
+	let mut out: Vec<DiscoveredAgent> = sessions
+		.iter()
+		.filter_map(|session| {
+			let proc_ = sys.process(Pid::from_u32(session.pid))?;
 			let (name, stack) = manifests
-				.entry(cwd.clone())
+				.entry(session.cwd.clone())
 				.or_insert_with(|| {
 					(
-						detect::name_from_dir(Path::new(&cwd)),
-						detect::stack_from_dir(Path::new(&cwd)).map(str::to_string),
+						detect::name_from_dir(Path::new(&session.cwd)),
+						detect::stack_from_dir(Path::new(&session.cwd)).map(str::to_string),
 					)
 				})
 				.clone();
 			Some(DiscoveredAgent {
-				pid,
-				agent: def.kind,
+				pid: session.pid,
+				agent: agent_kind(&session.agent)?,
 				name,
-				cwd,
+				cwd: session.cwd.clone(),
 				stack,
-				session_name,
+				// Straight from the hook. No fallback to the agent's own session logs:
+				// `resolve_agent` deliberately never read them for a hooked session, to
+				// avoid the macOS "access data from other apps" prompt, and every
+				// session here is hooked by definition.
+				session_name: session.name.clone(),
 				uptime_sec: proc_.run_time(),
-				cpu_percent,
 				memory_bytes: proc_.memory(),
-				state,
-				tty: tty.get(&pid).copied().unwrap_or_default().to_string(),
+				state: resolve_state(&session.state, session.ts, now),
+				tty: session.tty.clone(),
 				jump_supported: jump_target_from_env(
 					proc_.environ().iter().filter_map(|s| s.to_str()),
 				)
-				.is_some() || ancestry_target(pid, &ps).is_some(),
+				.is_some()
+					|| ancestry_host(session.pid).is_some(),
 			})
 		})
 		.collect();
 	out.sort_by_key(|a| a.pid);
 
-	// Stamp the live PIDs seen this pass per (agent, cwd) for the badge's liveness
-	// check. Replaces each on-screen key with its current live set; keys whose
-	// sessions are all gone keep their now-dead set (so the badge prunes them).
-	{
-		let mut seen: HashMap<(String, String), HashSet<u32>> = HashMap::new();
-		for a in &out {
-			seen.entry((a.agent.to_string(), a.cwd.clone())).or_default().insert(a.pid);
-		}
-		let st = app.state::<AppState>();
-		let mut pids = st.last_agent_pids.lock().unwrap();
-		for (key, live_pids) in seen {
-			pids.insert(key, live_pids);
-		}
-	}
 	out
 }
 
@@ -1112,17 +717,6 @@ mod tests {
 		assert_eq!(kind(&[]), None);
 	}
 
-	#[test]
-	fn slugs_match_verified_real_paths() {
-		assert_eq!(
-			claude_slug("/Users/abhi/DEV/abhi_github/abhi.page.11ty"),
-			"-Users-abhi-DEV-abhi-github-abhi-page-11ty"
-		);
-		assert_eq!(
-			pi_slug("/Users/abhi/DEV/eko_github/wlc-webapp"),
-			"--Users-abhi-DEV-eko_github-wlc-webapp--"
-		);
-	}
 
 	#[test]
 	fn parse_ps_snapshot_keeps_tty_and_ancestry() {
@@ -1142,32 +736,7 @@ mod tests {
 		assert!(t[&80].comm.contains("/iTerm.app/"));
 	}
 
-	#[test]
-	fn prune_orphan_hook_states_only_drops_dead_stale_waiting() {
-		let dir = std::env::temp_dir().join(format!("quay-prune-{}", std::process::id()));
-		let _ = std::fs::remove_dir_all(&dir);
-		std::fs::create_dir_all(&dir).unwrap();
-		let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
-		let stale = 1_000_000 - (HOOK_PRUNE_GRACE_SECS + 60);
-		let fresh = 1_000_000 - 10;
-		let write = |name: &str, cwd: &str, state: &str, ts: u64| {
-			let body = serde_json::json!({ "agent": "claude", "cwd": cwd, "state": state, "ts": ts });
-			std::fs::write(dir.join(name), body.to_string()).unwrap();
-		};
-		write("dead_stale.json", "/gone", "waiting", stale); // dead + old  → dropped
-		write("dead_fresh.json", "/gone2", "waiting", fresh); // dead but within grace → kept
-		write("live.json", "/live", "waiting", stale); // key is live → kept
-		write("working.json", "/gone3", "working", stale); // not waiting → untouched
 
-		let live: HashSet<(String, String)> = [("claude".to_string(), "/live".to_string())].into();
-		prune_orphan_hook_states(&dir, &live, now);
-
-		assert!(!dir.join("dead_stale.json").exists(), "dead+stale waiting must be pruned");
-		assert!(dir.join("dead_fresh.json").exists(), "within-grace waiting must survive");
-		assert!(dir.join("live.json").exists(), "live-keyed waiting must survive");
-		assert!(dir.join("working.json").exists(), "non-waiting files are out of scope");
-		let _ = std::fs::remove_dir_all(&dir);
-	}
 
 	#[test]
 	fn ancestry_target_walks_parent_chain() {
@@ -1187,27 +756,13 @@ mod tests {
 		assert_eq!(ancestry_target(999, &t), None); // unknown pid
 	}
 
-	#[test]
-	fn newest_jsonl_picks_latest_jsonl_only() {
-		let d = std::env::temp_dir().join(format!("msm-agent-{}", uuid::Uuid::new_v4()));
-		std::fs::create_dir_all(&d).unwrap();
-		assert!(newest_jsonl(&d).is_none());
-		std::fs::write(d.join("a.jsonl"), "x").unwrap();
-		std::fs::write(d.join("ignored.txt"), "x").unwrap();
-		let (path, mtime) = newest_jsonl(&d).unwrap();
-		assert_eq!(path, d.join("a.jsonl"));
-		assert_eq!(mtime, std::fs::metadata(d.join("a.jsonl")).unwrap().modified().unwrap());
-		assert!(newest_jsonl(&d.join("missing")).is_none());
-		std::fs::remove_dir_all(&d).ok();
-	}
 
 	#[test]
 	fn waiting_count_dedups_filters_and_skips_junk() {
 		use crate::model::IgnoredAgent;
 		let d = std::env::temp_dir().join(format!("msm-wc-{}", uuid::Uuid::new_v4()));
-		let no_pids = HashMap::new();
 		// Missing dir → 0.
-		assert_eq!(waiting_count(&d, &[], &no_pids), 0);
+		assert_eq!(waiting_count(&d, &[]), 0);
 		std::fs::create_dir_all(&d).unwrap();
 		let write = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
 		// Two waiting sessions in the SAME (agent, cwd) → dedup to one.
@@ -1222,178 +777,49 @@ mod tests {
 		write("bad.json", "not json");
 		write("nofield.json", r#"{"agent":"claude","ts":6}"#);
 		write("note.txt", r#"{"agent":"claude","cwd":"/e","state":"waiting","ts":7}"#);
-		assert_eq!(waiting_count(&d, &[], &no_pids), 2); // (claude,/a) + (codex,/b)
+		assert_eq!(waiting_count(&d, &[]), 2); // (claude,/a) + (codex,/b)
 		// Ignoring (codex,/b) drops it.
 		let ignored = vec![IgnoredAgent { agent: "codex".into(), cwd: "/b".into() }];
-		assert_eq!(waiting_count(&d, &ignored, &no_pids), 1);
+		assert_eq!(waiting_count(&d, &ignored), 1);
 		std::fs::remove_dir_all(&d).ok();
 	}
 
 	#[test]
-	fn waiting_count_skips_keys_whose_pids_are_all_dead() {
-		let d = std::env::temp_dir().join(format!("msm-wcl-{}", uuid::Uuid::new_v4()));
-		std::fs::create_dir_all(&d).unwrap();
-		let w = |name: &str, body: &str| std::fs::write(d.join(name), body).unwrap();
-		w("live.json", r#"{"agent":"claude","cwd":"/live","state":"waiting","ts":1}"#);
-		w("dead.json", r#"{"agent":"claude","cwd":"/dead","state":"waiting","ts":1}"#);
-		w("unseen.json", r#"{"agent":"claude","cwd":"/unseen","state":"waiting","ts":1}"#);
+	fn waiting_count_trusts_a_recorded_identity_over_the_scanned_pids() {
+		// Per-session liveness, which the coarse (agent, cwd) PID map cannot do: a
+		// dead session sharing a folder with a live sibling used to keep the badge lit.
+		let dir = std::env::temp_dir().join(format!("quay-wc-id-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&dir).unwrap();
+		let me = std::process::id();
+		let started = quay_hook::proc_info::info(me).unwrap().started_at;
+		let write = |name: &str, cwd: &str, pid: u32, started_at: u64| {
+			let body = serde_json::json!({
+				"agent": "claude", "cwd": cwd, "state": "waiting",
+				"ts": 1_000_000, "pid": pid, "startedAt": started_at,
+			});
+			std::fs::write(dir.join(name), body.to_string()).unwrap();
+		};
+		write("live.json", "/shared", me, started);
+		write("dead.json", "/shared2", 4_000_000_000, started);
+		write("recycled.json", "/shared3", me, started + 1);
 
-		// A definitely-dead pid: spawn a child and reap it.
-		let mut child = std::process::Command::new("/usr/bin/true").spawn().unwrap();
-		child.wait().unwrap();
-		let dead = child.id();
-		let live = std::process::id();
-
-		let mut pids: HashMap<(String, String), HashSet<u32>> = HashMap::new();
-		pids.insert(("claude".into(), "/live".into()), HashSet::from([live]));
-		// Dead alongside a *live-but-unrelated* pid still dead → any() false → skip.
-		pids.insert(("claude".into(), "/dead".into()), HashSet::from([dead]));
-		// (claude,/unseen) intentionally absent → never scanned → still counts.
-
-		// /live (alive) + /unseen (fallback) count; /dead skipped.
-		assert_eq!(waiting_count(&d, &[], &pids), 2);
-		// With no pid info at all, all three count.
-		assert_eq!(waiting_count(&d, &[], &HashMap::new()), 3);
-		std::fs::remove_dir_all(&d).ok();
-	}
-
-	#[test]
-	fn resolve_agent_reads_only_when_no_hook_state() {
-		// A poisoned HOME: a claude session log on disk with a distinctive name.
-		// When a hook state is present, resolve_agent must NOT read it (privacy);
-		// with no hook state, it falls back to reading it.
-		let d = std::env::temp_dir().join(format!("msm-ra-{}", uuid::Uuid::new_v4()));
-		let cwd = "/x/proj";
-		let proj = d.join(".claude/projects").join(claude_slug(cwd));
-		std::fs::create_dir_all(&proj).unwrap();
-		std::fs::write(
-			proj.join("s.jsonl"),
-			"{\"type\":\"user\",\"message\":{\"content\":\"FILE PROMPT\"}}\n",
-		)
-		.unwrap();
-		let now = SystemTime::now();
-		let claude = &AGENTS[0];
-		assert_eq!(claude.kind, "claude");
-
-		let mut names = HashMap::new();
-		// Hook present → hook name, file untouched (still "working" from the fresh hook).
-		let hook = HookState { state: "working".into(), ts: now, name: Some("HOOK NAME".into()) };
-		let (state, name) =
-			resolve_agent(claude, Some(&hook), &d, cwd, 0.0, &[], "", now, &mut names);
-		assert_eq!(state, "working");
-		assert_eq!(name.as_deref(), Some("HOOK NAME"));
-		assert!(names.is_empty(), "hooked session must not touch (or cache) the log");
-
-		// No hook → falls back to reading the session log.
-		let (_, name2) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
-		assert_eq!(name2.as_deref(), Some("FILE PROMPT"));
-		std::fs::remove_dir_all(&d).ok();
-	}
-
-	#[test]
-	fn claude_name_cache_serves_hits_and_retries_misses() {
-		let d = std::env::temp_dir().join(format!("msm-rc-{}", uuid::Uuid::new_v4()));
-		let cwd = "/x/proj";
-		let proj = d.join(".claude/projects").join(claude_slug(cwd));
-		std::fs::create_dir_all(&proj).unwrap();
-		let log = proj.join("s.jsonl");
-		// A session log exists before its first user prompt is written — the miss
-		// must NOT be cached, or the name would never appear.
-		std::fs::write(&log, "{\"type\":\"system\"}\n").unwrap();
-		let now = SystemTime::now();
-		let claude = &AGENTS[0];
-		let mut names = HashMap::new();
-
-		let (_, missing) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
-		assert_eq!(missing, None);
-		assert!(names.is_empty(), "a nameless log must not be cached as a miss");
-
-		std::fs::write(&log, "{\"type\":\"user\",\"message\":{\"content\":\"LATER\"}}\n").unwrap();
-		let (_, found) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
-		assert_eq!(found.as_deref(), Some("LATER"));
-		assert_eq!(names.get(&log).map(String::as_str), Some("LATER"));
-
-		// Cached: served without re-reading, proven by emptying the file on disk.
-		std::fs::write(&log, "").unwrap();
-		let (_, cached) = resolve_agent(claude, None, &d, cwd, 0.0, &[], "", now, &mut names);
-		assert_eq!(cached.as_deref(), Some("LATER"));
-		std::fs::remove_dir_all(&d).ok();
-	}
-
-	#[test]
-	fn hook_states_merges_latest_name_independent_of_state() {
-		let d = std::env::temp_dir().join(format!("msm-hn-{}", uuid::Uuid::new_v4()));
-		std::fs::create_dir_all(&d).unwrap();
-		let now = SystemTime::now();
-		let ts = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-		// State-winner (waiting) carries no name; an older sibling has one → name survives.
-		std::fs::write(
-			d.join("wait.json"),
-			format!("{{\"agent\":\"claude\",\"cwd\":\"/a\",\"state\":\"waiting\",\"ts\":{ts}}}"),
-		)
-		.unwrap();
-		std::fs::write(
-			d.join("named.json"),
-			format!("{{\"agent\":\"claude\",\"cwd\":\"/a\",\"state\":\"working\",\"ts\":{},\"name\":\"the task\"}}", ts - 30),
-		)
-		.unwrap();
-		let live = [("claude", "/a")];
-		let map = hook_states(&d, &live, now);
-		let hs = &map[&("claude".into(), "/a".into())];
-		assert_eq!(hs.state, "waiting"); // precedence unchanged
-		assert_eq!(hs.name.as_deref(), Some("the task")); // name merged in
-		std::fs::remove_dir_all(&d).ok();
-	}
-
-	#[test]
-	fn first_user_prompt_finds_first_real_prompt() {
-		let jsonl = concat!(
-			"{\"type\":\"last-prompt\",\"leafUuid\":\"x\"}\n",
-			"{\"type\":\"user\",\"isMeta\":true,\"message\":{\"content\":\"Caveat: meta\"}}\n",
-			"{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"tool_result\",\"content\":\"out\"}]}}\n",
-			"{\"type\":\"user\",\"message\":{\"content\":\"<command-name>/clear</command-name>\"}}\n",
-			"{\"type\":\"user\",\"message\":{\"content\":[{\"type\":\"text\",\"text\":\"Fix the login bug\"}]}}\n",
-		);
-		assert_eq!(first_user_prompt(jsonl).as_deref(), Some("Fix the login bug"));
-		// String-content form and no-user-message form.
+		// Deliberately empty: the recorded identity must be used instead, so the map
+		// the popover scan stamps is not consulted at all.
 		assert_eq!(
-			first_user_prompt("{\"type\":\"user\",\"message\":{\"content\":\"hello\"}}\n").as_deref(),
-			Some("hello")
+			waiting_count(&dir, &[]),
+			1,
+			"only the session whose process is genuinely still there counts"
 		);
-		assert_eq!(first_user_prompt("{\"type\":\"assistant\"}\nnot json\n"), None);
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
-	#[test]
-	fn truncate_label_caps_at_80_chars() {
-		let long = "x".repeat(100);
-		let t = truncate_label(&long);
-		assert_eq!(t.chars().count(), 81); // 80 + ellipsis
-		assert!(t.ends_with('…'));
-		assert_eq!(truncate_label("short"), "short");
-	}
 
-	#[test]
-	fn rollout_meta_parses_session_meta_line() {
-		let line = "{\"timestamp\":\"t\",\"type\":\"session_meta\",\"payload\":{\"session_id\":\"s1\",\"id\":\"id1\",\"cwd\":\"/x/proj\"}}";
-		assert_eq!(rollout_meta(line), Some(("/x/proj".into(), "id1".into())));
-		// Falls back to session_id when id is missing.
-		let line2 = "{\"type\":\"session_meta\",\"payload\":{\"session_id\":\"s2\",\"cwd\":\"/y\"}}";
-		assert_eq!(rollout_meta(line2), Some(("/y".into(), "s2".into())));
-		assert_eq!(rollout_meta("{\"type\":\"response_item\"}"), None);
-		assert_eq!(rollout_meta("garbage"), None);
-	}
 
-	#[test]
-	fn thread_name_for_takes_last_match() {
-		let index = concat!(
-			"{\"id\":\"a\",\"thread_name\":\"old name\",\"updated_at\":\"t1\"}\n",
-			"{\"id\":\"b\",\"thread_name\":\"other\",\"updated_at\":\"t2\"}\n",
-			"{\"id\":\"a\",\"thread_name\":\"new name\",\"updated_at\":\"t3\"}\n",
-		);
-		assert_eq!(thread_name_for(index, "a").as_deref(), Some("new name"));
-		assert_eq!(thread_name_for(index, "b").as_deref(), Some("other"));
-		assert_eq!(thread_name_for(index, "missing"), None);
-	}
+
+
+
+
+
 
 	#[test]
 	fn jump_target_from_env_resolves_each_host() {
@@ -1470,93 +896,114 @@ mod tests {
 		assert_eq!(t(&[]), None);
 	}
 
-	#[test]
-	fn resolve_state_waiting_working_and_heuristic() {
-		let now = SystemTime::now();
-		let hook_ts = now - std::time::Duration::from_secs(30);
-		let waiting = HookState { state: "waiting".into(), ts: hook_ts, name: None };
-		let working = HookState { state: "working".into(), ts: hook_ts, name: None };
-		// Waiting holds with no log write, or a write from before the event.
-		assert_eq!(resolve_state(Some(&waiting), None, 0.0, now), "waiting");
-		let before = hook_ts - std::time::Duration::from_secs(10);
-		assert_eq!(resolve_state(Some(&waiting), Some(before), 0.0, now), "waiting");
-		// A log write after the event means the session resumed → heuristic
-		// (5 s old write → working).
-		let after = hook_ts + std::time::Duration::from_secs(25);
-		assert_eq!(resolve_state(Some(&waiting), Some(after), 0.0, now), "working");
-		// A fresh hook "working" shows working directly, even with cold signals.
-		assert_eq!(resolve_state(Some(&working), None, 0.0, now), "working");
-		// A stale hook "working" defers to the heuristic: cold → idle, busy →
-		// working (via the CPU signal, not the stale hook).
-		let stale = HookState {
-			state: "working".into(),
-			ts: now - std::time::Duration::from_secs(WORKING_STALE_SECS + 1),
-			name: None,
-		};
-		assert_eq!(resolve_state(Some(&stale), None, 0.0, now), "idle");
-		assert_eq!(resolve_state(Some(&stale), None, 50.0, now), "working");
-		// No hook → pure heuristic (busy → working, cold → idle).
-		assert_eq!(resolve_state(None, None, 50.0, now), "working");
-		assert_eq!(resolve_state(None, None, 0.0, now), "idle");
+	/// A state file as the current helper writes one.
+	fn write_state(dir: &Path, file: &str, cwd: &str, state: &str, pid: u32, started: u64, ts: u64) {
+		let body = serde_json::json!({
+			"agent": "claude", "cwd": cwd, "state": state, "ts": ts,
+			"pid": pid, "startedAt": started, "tty": "ttys001",
+		});
+		std::fs::write(dir.join(file), body.to_string()).unwrap();
+	}
+
+	fn tmpdir(tag: &str) -> PathBuf {
+		let d = std::env::temp_dir().join(format!("quay-{tag}-{}", uuid::Uuid::new_v4()));
+		std::fs::create_dir_all(&d).unwrap();
+		d
 	}
 
 	#[test]
-	fn hook_states_precedence_pruning_and_corrupt_files() {
-		let d = std::env::temp_dir().join(format!("msm-hook-{}", uuid::Uuid::new_v4()));
-		std::fs::create_dir_all(&d).unwrap();
-		let now = SystemTime::now();
-		let ts = now.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
-		let write = |name: &str, agent: &str, cwd: &str, state: &str, ts: u64| {
-			std::fs::write(
-				d.join(name),
-				format!("{{\"agent\":\"{agent}\",\"cwd\":\"{cwd}\",\"state\":\"{state}\",\"ts\":{ts}}}"),
-			)
-			.unwrap();
-		};
-		// Two claude sessions in one cwd: waiting must win over a newer idle.
-		write("s1.json", "claude", "/x/app", "waiting", ts - 60);
-		write("s2.json", "claude", "/x/app", "idle", ts);
-		// Same cwd, different agent → distinct key, not clobbered by claude.
-		write("s2b.json", "codex", "/x/app", "working", ts);
-		// Live cwd → kept even when the dead-cwd grace has passed.
-		write("s3.json", "claude", "/y/live", "working", ts - HOOK_PRUNE_GRACE_SECS - 100);
-		// Missing agent field → defaults to claude (back-compat).
+	fn discovery_is_the_set_of_live_state_files() {
+		// The radar no longer infers sessions from tty-attached processes: a session
+		// exists because its agent said so, and stops existing when its process does.
+		let dir = tmpdir("live-sessions");
+		let me = std::process::id();
+		let started = quay_hook::proc_info::info(me).unwrap().started_at;
+
+		write_state(&dir, "live.json", "/a", "working", me, started, 1_000);
+		write_state(&dir, "dead.json", "/b", "waiting", 4_000_000_000, started, 1_000);
+		write_state(&dir, "recycled.json", "/c", "waiting", me, started + 1, 1_000);
+		// No pid: written by an older helper. Skipped for discovery, but kept on disk
+		// so the always-on badge path can still honour it until it is rewritten.
 		std::fs::write(
-			d.join("s3b.json"),
-			format!("{{\"cwd\":\"/w/old\",\"state\":\"waiting\",\"ts\":{ts}}}"),
+			dir.join("legacy.json"),
+			serde_json::json!({"agent":"claude","cwd":"/d","state":"waiting","ts":1_000}).to_string(),
 		)
 		.unwrap();
-		// Dead (agent, cwd): young file kept on disk (grace), old file pruned.
-		write("s4.json", "claude", "/z/dead-young", "idle", ts);
-		write("s5.json", "claude", "/z/dead-old", "idle", ts - HOOK_PRUNE_GRACE_SECS - 100);
-		// Live cwd but wrong agent → not live for this pair → grace-pruned.
-		write("s7.json", "codex", "/y/live", "idle", ts - HOOK_PRUNE_GRACE_SECS - 100);
-		std::fs::write(d.join("s6.json"), "{ partial garb").unwrap();
+		std::fs::write(dir.join("corrupt.json"), "{not json").unwrap();
 
-		let live = [("claude", "/x/app"), ("codex", "/x/app"), ("claude", "/y/live"), ("claude", "/w/old")];
-		let map = hook_states(&d, &live, now);
-		assert_eq!(map[&("claude".into(), "/x/app".into())].state, "waiting");
-		assert_eq!(map[&("codex".into(), "/x/app".into())].state, "working");
-		assert_eq!(map[&("claude".into(), "/y/live".into())].state, "working");
-		assert_eq!(map[&("claude".into(), "/w/old".into())].state, "waiting"); // agent defaulted
-		assert!(!map.contains_key(&("claude".into(), "/z/dead-young".into()))); // not live
-		assert!(d.join("s4.json").exists()); // …but still on disk (grace)
-		assert!(!d.join("s5.json").exists()); // pruned
-		assert!(!d.join("s7.json").exists()); // codex in a claude-only cwd → pruned
-		assert!(!d.join("s6.json").exists()); // corrupt → deleted
-		assert!(hook_states(&d.join("missing"), &[], now).is_empty());
-		std::fs::remove_dir_all(&d).ok();
+		let found = live_sessions(&dir, &[]);
+		assert_eq!(found.len(), 1, "only the session whose process is still there");
+		assert_eq!(found[0].cwd, "/a");
+		assert_eq!(found[0].tty, "ttys001", "tty comes from the file, not from ps");
+
+		assert!(!dir.join("dead.json").exists(), "a dead session's file is reclaimed");
+		assert!(!dir.join("recycled.json").exists(), "a recycled pid is not the same session");
+		assert!(!dir.join("corrupt.json").exists(), "unparseable files are dropped");
+		assert!(dir.join("legacy.json").exists(), "a pid-less file is skipped, not deleted");
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 
 	#[test]
-	fn is_active_on_recent_write_or_busy_cpu() {
+	fn an_ignored_pair_is_discovered_but_not_returned() {
+		let dir = tmpdir("live-ignored");
+		let me = std::process::id();
+		let started = quay_hook::proc_info::info(me).unwrap().started_at;
+		write_state(&dir, "a.json", "/hidden", "waiting", me, started, 1_000);
+
+		let ignored = vec![crate::model::IgnoredAgent {
+			agent: "claude".to_string(),
+			cwd: "/hidden".to_string(),
+		}];
+		assert!(live_sessions(&dir, &ignored).is_empty(), "hidden pairs never surface");
+		assert!(dir.join("a.json").exists(), "hiding a row must not delete its state");
+		let _ = std::fs::remove_dir_all(&dir);
+	}
+
+	#[test]
+	fn a_working_state_goes_stale_but_waiting_never_does() {
+		let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_000_000);
+		let ago = |secs: u64| now - std::time::Duration::from_secs(secs);
+
+		assert_eq!(resolve_state("working", ago(10), now), "working");
+		// A missed clearing hook must not pin a row green forever.
+		assert_eq!(resolve_state("working", ago(WORKING_STALE_SECS + 1), now), "idle");
+		// Waiting has no staleness rule: a session blocked on a permission prompt can
+		// sit there for hours and is still blocked on you.
+		assert_eq!(resolve_state("waiting", ago(86_400), now), "waiting");
+		assert_eq!(resolve_state("idle", ago(1), now), "idle");
+		assert_eq!(resolve_state("anything-else", ago(1), now), "idle");
+	}
+
+	#[test]
+	fn prune_uses_identity_when_present_and_the_grace_only_when_not() {
+		let dir = tmpdir("prune");
+		let me = std::process::id();
+		let started = quay_hook::proc_info::info(me).unwrap().started_at;
 		let now = SystemTime::now();
-		let fresh = now - std::time::Duration::from_secs(5);
-		let stale = now - std::time::Duration::from_secs(60);
-		assert!(is_active(Some(fresh), 0.0, now));
-		assert!(!is_active(Some(stale), 0.0, now));
-		assert!(is_active(None, 15.0, now));
-		assert!(!is_active(None, 5.0, now));
+		let secs = |t: SystemTime| t.duration_since(SystemTime::UNIX_EPOCH).unwrap().as_secs();
+		let old = secs(now) - (HOOK_PRUNE_GRACE_SECS + 60);
+
+		// Identity present: exact, and no grace needed either way.
+		write_state(&dir, "alive.json", "/a", "waiting", me, started, old);
+		write_state(&dir, "gone.json", "/b", "waiting", 4_000_000_000, started, secs(now));
+		// Legacy: falls back to the live set and the grace window.
+		let legacy = |file: &str, cwd: &str, ts: u64| {
+			let body = serde_json::json!({"agent":"claude","cwd":cwd,"state":"waiting","ts":ts});
+			std::fs::write(dir.join(file), body.to_string()).unwrap();
+		};
+		legacy("legacy_dead_stale.json", "/gone", old);
+		legacy("legacy_dead_fresh.json", "/gone2", secs(now) - 10);
+		legacy("legacy_live.json", "/live", old);
+
+		let live: HashSet<(String, String)> =
+			[("claude".to_string(), "/live".to_string())].into();
+		prune_orphan_hook_states(&dir, || live.clone(), now);
+
+		assert!(dir.join("alive.json").exists(), "a live process keeps its row, however old");
+		assert!(!dir.join("gone.json").exists(), "a dead process clears with no grace");
+		assert!(!dir.join("legacy_dead_stale.json").exists(), "legacy dead+stale is pruned");
+		assert!(dir.join("legacy_dead_fresh.json").exists(), "legacy within grace survives");
+		assert!(dir.join("legacy_live.json").exists(), "legacy live-keyed survives");
+		let _ = std::fs::remove_dir_all(&dir);
 	}
 }
-

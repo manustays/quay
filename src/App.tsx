@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { UnlistenFn } from '@tauri-apps/api/event';
 import { TooltipProvider } from '@/components/ui/tooltip';
-import { detectFolder, getItems, getPendingUpdate, getPopoverVisible, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPopoverVisibility, onPortsDiscovered, onStatusChanged, onUpdateAvailable } from './ipc';
+import { detectFolder, getHookStatuses, getItems, getPendingUpdate, getPopoverVisible, getSettings, getStatuses, onAgentsDiscovered, onMetricsChanged, onPopoverVisibility, onPortsDiscovered, onStatusChanged, onUpdateAvailable } from './ipc';
 import { blankItem, type DiscoveredAgent, type DiscoveredPort, type ItemMetrics, type ManagedItem, type Status, type UpdateInfo } from './model';
 import { Popup } from './components/Popup';
 import { ServiceForm } from './components/ServiceForm';
@@ -41,6 +41,12 @@ export function App(): React.JSX.Element {
 	// or the item being edited; `settingsOpen` toggles the settings dialog.
 	const [editing, setEditing] = useState<ManagedItem | null | undefined>(undefined);
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	// Whether any agent has its hooks installed. Agents are discovered from hook
+	// state files, so with none installed the radar is silent by design — the
+	// Agents section says so rather than just being absent, which reads as broken.
+	const [anyHooks, setAnyHooks] = useState(true);
+	// Tracking can be switched off entirely; then there is nothing to explain.
+	const [trackAgents, setTrackAgents] = useState(true);
 
 	// A pending app update to show as a banner. `dismissedVersionRef` remembers the
 	// version the user dismissed so the daily re-check (which re-emits the same
@@ -71,6 +77,14 @@ export function App(): React.JSX.Element {
 	const reloadSettings = useCallback(async () => {
 		const settings = await getSettings();
 		setRadarDevOnly(settings.radarDevOnly);
+		setTrackAgents(settings.trackAgents);
+		// Re-read after the dialog saves, so installing a hook there clears the
+		// empty state without needing a restart.
+		void getHookStatuses()
+			.then((statuses) => setAnyHooks(statuses.some((h) => h.installed)))
+			// A failed probe must not claim "no hooks installed" and send someone to
+			// Settings to fix a problem they do not have.
+			.catch(() => setAnyHooks(true));
 		// Tracking off: the backend stops emitting `agents_discovered`, so rows already
 		// on screen would linger. Clearing here also hides the Agents section, which
 		// renders only when there are agents.
@@ -214,6 +228,7 @@ export function App(): React.JSX.Element {
 				metrics={metrics}
 				discovered={discovered}
 				agents={agents}
+				agentsUnconfigured={trackAgents && !anyHooks}
 				radarDevOnly={radarDevOnly}
 				onChange={refresh}
 				onAdd={() => setEditing(null)}

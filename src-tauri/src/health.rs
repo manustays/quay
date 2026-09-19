@@ -153,9 +153,22 @@ use crate::model::{ItemKind, RunMode};
 use crate::state::AppState;
 use tauri::{AppHandle, Manager};
 
-/// Spawn a background thread that calls `poll_once` every `poll_interval_sec` seconds.
+/// Spawn a background thread that calls `poll_once` every `poll_interval_sec` seconds
+/// for as long as a human could see the result.
+///
+/// This is the app's energy floor: the metrics and radar loops park when the popover
+/// closes, but status and the tray badge have to stay fresh while the tray is on
+/// screen. They are *not* on screen when every display is asleep or the Mac is
+/// locked, so the loop parks on the same condvar the other two use — see
+/// [`AppState::wait_awake`]. Parked, it costs no wakeups at all.
+///
+/// Gating the next iteration does not cancel a pass already in flight, so what this
+/// buys is eventual quiescence, not an instant stop.
 pub fn spawn_poll_loop(app: AppHandle) {
 	std::thread::spawn(move || loop {
+		// Park first: on resume the fresh status pass and badge refresh are the very
+		// first thing that runs, so the tray is right by the time it is looked at.
+		let generation = app.state::<AppState>().wait_awake();
 		let interval = {
 			let st = app.state::<AppState>();
 			let secs = st.config.lock().unwrap().settings.poll_interval_sec.max(1);
@@ -166,7 +179,8 @@ pub fn spawn_poll_loop(app: AppHandle) {
 		// (and its heavier radar scan) is closed. `false`: the `ps`-forking orphan
 		// sweep is rate-limited here, not run every tick.
 		crate::refresh_waiting_badge(&app, false);
-		std::thread::sleep(std::time::Duration::from_secs(interval));
+		app.state::<AppState>()
+			.wait_awake_interval(generation, std::time::Duration::from_secs(interval));
 	});
 }
 
