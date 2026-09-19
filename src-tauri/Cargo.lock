@@ -2495,7 +2495,7 @@ dependencies = [
 
 [[package]]
 name = "quay"
-version = "0.20.0"
+version = "0.21.0"
 dependencies = [
  "block2",
  "dirs 5.0.1",

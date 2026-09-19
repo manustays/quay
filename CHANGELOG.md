@@ -1,3 +1,10 @@
+# [0.21.0](https://github.com/manustays/quay/compare/v0.20.0...v0.21.0) (2026-09-19)
+
+
+### Features
+
+* **popover:** open the website or release notes from the title bar ([b2bd664](https://github.com/manustays/quay/commit/b2bd6646ea11866923013eb3efae79c754d1357c))
+
 # [0.20.0](https://github.com/manustays/quay/compare/v0.19.0...v0.20.0) (2026-09-19)
 
 
