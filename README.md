@@ -49,13 +49,14 @@ If you build a lot of local services, you know the dance: remember which folder,
 - **Open a terminal** already `cd`'d into the service's folder, when you actually need to watch logs.
 - **Auto-detect on add** — pick a folder and the app reads `package.json` / `requirements.txt` / `.env` to pre-fill the start command and port.
 - **Port radar** — dev servers you started outside Quay show up in a **Detected** section (project name + framework icon), with one-click **adopt as service**, kill, or ignore. A stopped item whose port is taken by another process gets a ⚠ collision badge.
-- **Agent radar** — terminal AI-agent sessions (Claude Code, Codex CLI, OpenCode, Pi) you started yourself show up in an **Agents** section with project name + stack icon, session name on hover, CPU/memory/uptime, and a working / idle / waiting-on-you dot; sessions in the same folder club into a project row with stacked agent badges. Install per-agent hooks in one click (Settings) for exact states — including "waiting at a permission prompt". Jump-to-session, reveal-in-Finder, kill, and ignore per session.
+- **Agent radar** — AI-agent sessions (Claude Code, Codex CLI, OpenCode, Pi) show up in an **Agents** section with project name + stack icon, session name on hover, memory/uptime, and a working / idle / waiting-on-you dot; sessions in the same folder club into a project row with stacked agent badges. **Install per-agent hooks in one click (Settings)** — each agent then reports its own lifecycle, so states are exact (including "waiting at a permission prompt") and Quay never reads the agents' own files. Sessions are discovered from those hook reports, so an agent with no hooks installed does not appear. Jump-to-session, reveal-in-Finder, kill, and ignore per session.
 - **Tech-stack icons** — rows show the detected framework/runtime (Vite, Next, Django, Rails, Go, Rust, Docker, …) as a brand-colored icon.
 - **Groups** — label related items (backend + frontend of one app) with a shared group; they cluster together with an aggregate status dot and start-all/stop-all.
 - **Favorites + search** — pin the services you use most; the rest tuck under a collapsible "More".
 - **Quality of life** — click a port to copy its `localhost` URL, per-row uptime, reveal-in-Finder, and crash errors that include the exit code + last log lines.
 - **Per-item env vars, custom health path, and auto-start-on-launch.**
 - **Configurable terminal** (Terminal.app or iTerm2) and **launch-at-login**.
+- **Idles when you aren't looking** — the heavy sampling loops stop when the popover is closed, and *everything* stops when your displays sleep or the Mac is locked, since nothing it computes is on screen then. Measured at 0.10 % CPU and ~0 idle wakeups per minute sitting in the menubar; see [Performance](docs/performance.md).
 - **Native & light** — built with Tauri v2 (Rust core + system webview), no bundled Chromium.
 
 ## Requirements
@@ -67,24 +68,27 @@ If you build a lot of local services, you know the dance: remember which folder,
 
 ## Permissions & Privacy
 
-**Why macOS asks "Quay wants to access data from other apps."**
-The **Agent radar** shows the state and name of coding-agent sessions you started
-yourself (Claude Code, Codex CLI, OpenCode, Pi). With no deeper integration, Quay
-learns this the only way it can: by **reading** the session/log files those tools
-write under `~/.claude`, `~/.codex`, and `~/.pi`. macOS Sequoia classifies those as
-another app's data, so it shows that prompt the first time a session is detected.
+**Quay does not read your agents' files.** The **Agent radar** shows the state and
+name of coding-agent sessions (Claude Code, Codex CLI, OpenCode, Pi), and it learns
+all of it from the agents themselves: you install per-agent hooks in **Settings** with
+one click, and each agent reports its own lifecycle to Quay through a tiny helper.
 
-**It's opt-in and lazy.** Quay never reads those files at launch or in the
-background — the read happens **only when an agent session is actually running and
-you open the popover**. No agents running, no read, no prompt.
+Earlier versions had a fallback that **read** the session and log files those tools
+write under `~/.claude`, `~/.codex` and `~/.pi` when hooks were not installed — which is
+what triggered the macOS Sequoia prompt *"Quay wants to access data from other apps."*
+Those readers are gone. The radar never opens those directories.
 
-**Installing hooks removes the reads entirely.** Turn on per-agent hooks in
-**Settings** (one click) and each agent reports its own state to Quay through a
-tiny helper. Once hooks are active for a session, Quay **stops reading that agent's
-files** and relies on the hook events instead — so the "access data from other
-apps" prompt won't recur for hooked agents. (Session names still come through for
-Claude Code and Codex; OpenCode and Pi hooks don't carry a prompt, so those rows
-may show the project without a session name.)
+The one file Quay still touches there is **the hook config you asked it to install**
+(`~/.claude/settings.json` and the equivalents). It writes that on install, and re-reads
+it at launch to keep it current across app updates — so on a machine with hooks
+installed, macOS may still ask once. Install no hooks and Quay never goes near those
+directories at all.
+
+The trade is that a session is only visible once its agent's hooks are installed. With
+none installed, the Agents section says so and offers the button that installs them.
+
+(Session names come from the prompt you typed, which Claude Code and Codex pass to the
+hook. OpenCode and Pi don't, so those rows show the project without a session name.)
 
 **Why it's safe:**
 
@@ -94,8 +98,9 @@ may show the project without a session name.)
   sessions, projects, or prompts ever leaves the device.
 - **Nearly zero network.** The only network access is an **optional check for app
   updates** against GitHub Releases. There is no other outbound traffic.
-- **Fully open source.** Every read described here is in
-  [`src-tauri/src/agent_radar.rs`](src-tauri/src/agent_radar.rs) — audit it yourself.
+- **Fully open source.** The radar is
+  [`src-tauri/src/agent_radar.rs`](src-tauri/src/agent_radar.rs) and the hook helper is
+  [`src-tauri/crates/quay-hook`](src-tauri/crates/quay-hook) — audit them yourself.
 
 ## Download
 
