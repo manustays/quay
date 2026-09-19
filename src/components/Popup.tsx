@@ -12,7 +12,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { aggregateGroupMetrics, aggregateGroupStatus, groupAgentsByCwd, groupItems, matchesSearch, moveInList, splitFavorites, type DiscoveredAgent, type DiscoveredPort, type GroupStatus, type ItemMetrics, type ManagedItem, type Status, type UpdateInfo } from '../model';
 import { cn } from '@/lib/utils';
 import { ensureDockerDaemon } from '@/lib/docker';
-import { reorder, startItem, stopItem } from '../ipc';
+import { openHomepage, openReleases, reorder, startItem, stopItem } from '../ipc';
 import { AgentFolderRow, AgentRow } from './AgentRow';
 import { BuoyMark } from './BuoyMark';
 import { DetectedRow } from './DetectedRow';
@@ -323,12 +323,24 @@ export function Popup({
 					<>
 						<BuoyMark className="size-6 shrink-0" />
 						<div className="flex min-w-0 flex-1 items-baseline gap-1.5">
-							<h1 className="truncate font-heading text-[14px] font-semibold tracking-tight">
-								{__APP_NAME__}
+							<h1 className="min-w-0 truncate font-heading text-[14px] font-semibold tracking-tight">
+								<button
+									type="button"
+									onClick={() => void openHomepage()}
+									title="Open the Quay website"
+									className="cursor-pointer truncate transition-opacity hover:opacity-70"
+								>
+									{__APP_NAME__}
+								</button>
 							</h1>
-							<span className="shrink-0 rounded-full bg-muted px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground tabular-nums">
+							<button
+								type="button"
+								onClick={() => void openReleases()}
+								title="What's new — open the release notes"
+								className="shrink-0 cursor-pointer rounded-full bg-muted px-1.5 py-px font-mono text-[10px] font-medium text-muted-foreground tabular-nums hover:bg-muted hover:text-foreground"
+							>
 								v{__APP_VERSION__}
-							</span>
+							</button>
 						</div>
 					</>
 				)}

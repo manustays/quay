@@ -504,6 +504,17 @@ pub fn open_browser(app: AppHandle, id: String) -> Result<(), AppError> {
 	Ok(())
 }
 
+/// Open Quay's website in the system browser.
+/// Hardcoded URL — no arg, no injection surface. macOS-specific (`open`).
+#[tauri::command]
+pub fn open_homepage() -> Result<(), AppError> {
+	std::process::Command::new("open")
+		.arg("https://abhi.am/quay")
+		.spawn()
+		.map_err(|e| AppError::Message(e.to_string()))?;
+	Ok(())
+}
+
 /// Open the GitHub releases page (the full changelog) in the system browser.
 /// Hardcoded URL — no arg, no injection surface. macOS-specific (`open`).
 #[tauri::command]

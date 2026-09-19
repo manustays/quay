@@ -37,11 +37,12 @@ If you build a lot of local services, you know the dance: remember which folder,
 
 ## Features
 
-- **One unified list** for four kinds of long-running things:
+- **One unified list** for five kinds of long-running things:
   - **Project servers** — Node/Python apps on `localhost:<port>` (`npm run dev`, `python main.py`, …)
   - **Homebrew services** — `brew services` formulae like `mysql`, `mongodb-community`, `redis`
   - **Docker containers** — pick an image (autocompleted from your local images), name the container, and Quay starts the daemon if needed, then runs/reuses it
   - **Terminal agents** — interactive tools you run in a terminal (e.g. Claude Code, custom agents)
+  - **Command services** — daemons driven by their own CLI (`omlx start` / `omlx stop`, a launchd service, …). Quay runs both commands and reads status from the port, so starting or stopping one outside Quay shows up too
 - **Start / stop** each item from the menubar. Background services run headless (no foreground terminal); their output is logged to a file.
 - **Live status** — process liveness **plus** a port/HTTP health check, polled in the background and pushed to the UI (no manual refresh).
 - **Resource metrics** — live CPU % and memory per item (including per-container `docker stats`), sampled while the popover is open.
@@ -164,12 +165,12 @@ See the **[Usage guide](docs/usage.md)** for the full walkthrough of item kinds,
 
 ## How does it work
 
-A Rust core owns all process supervision and state; a small vanilla-TypeScript webview is the popover UI. They talk over Tauri commands (UI → Rust) and events (Rust → UI). Background services are spawned as child processes in their own process group (so the whole tree can be stopped cleanly), with stdout/stderr written to a per-item log file. A background poll loop checks each item's process and port and pushes status changes to the UI. Everything dies with the app — quit from the tray's right-click **Quit** and owned children are terminated. See [Architecture](docs/architecture.md).
+A Rust core owns all process supervision and state; a small vanilla-TypeScript webview is the popover UI. They talk over Tauri commands (UI → Rust) and events (Rust → UI). Background services are spawned as child processes in their own process group (so the whole tree can be stopped cleanly), with stdout/stderr written to a per-item log file. A background poll loop checks each item's process and port and pushes status changes to the UI. Quit from the tray's right-click **Quit** and the children Quay owns are terminated; what it doesn't own — terminal windows, brew services, Docker containers, command-service daemons — is left running. See [Architecture](docs/architecture.md).
 
 ## Known limitations
 
 - **macOS only.**
-- **Services don't survive an app restart** by design — quitting the app stops everything it started; on relaunch all items show `stopped`.
+- **Owned background services stop when you quit** — quitting terminates the child processes Quay spawned itself, and they are not restarted on the next launch (turn on **Auto-start** per item for that). Anything Quay doesn't own — terminal windows, brew services, Docker containers, command-service daemons — keeps running, and its status is re-derived on relaunch.
 - **Terminal-mode items are best-effort** — the app opens a Terminal/iTerm window but doesn't own that process; "stop" for those is best-effort, and a terminal item with a configured port can sit at `starting` if its window is closed externally.
 - **Releases are not yet code-signed/notarized** — the download opens after an **Open Anyway** step (see [Download](#download)); a signed build removes that.
 
