@@ -181,9 +181,12 @@ pub fn adopt(pid: u32, log_path: PathBuf) -> Running {
 /// an *adopted* process we only signal the PID itself — we did not create its group,
 /// so signalling `-pgid` could hit unrelated processes sharing that group.
 pub fn stop(running: &mut Running) -> Result<(), AppError> {
-	let owned = running.is_owned();
-	let pid = running.pid as i32;
-	let target = if owned { -pid } else { pid };
+	// An invalid pid has nothing we may signal. Report success so callers still drop
+	// the entry and persist — otherwise the bad pid survives in `pids.json`.
+	let Some(target) = signal_target(running.pid, running.is_owned()) else {
+		crate::log_warn("refusing to signal invalid pid", running.pid);
+		return Ok(());
+	};
 	unsafe { libc::kill(target, libc::SIGTERM) };
 
 	for _ in 0..50 {
@@ -199,6 +202,15 @@ pub fn stop(running: &mut Running) -> Result<(), AppError> {
 		let _ = child.wait();
 	}
 	Ok(())
+}
+
+/// The `kill(2)` target for `pid`: `-pid` (its process group) when owned, else `pid`.
+/// `None` for a pid that would hit the wrong processes — `0` means Quay's own group,
+/// and anything above `i32::MAX` wraps negative (`u32::MAX` → `-1`, every process
+/// the user owns). A stale or corrupt `pids.json` entry reaches here via `adopt`.
+fn signal_target(pid: u32, owned: bool) -> Option<i32> {
+	let pid = i32::try_from(pid).ok().filter(|&p| p > 0)?;
+	Some(if owned { -pid } else { pid })
 }
 
 /// Return `true` if the process has not yet exited.
@@ -334,6 +346,16 @@ mod tests {
 		stop(&mut r).unwrap();
 		assert!(!is_alive(&mut r));
 		std::fs::remove_dir_all(&logs).ok();
+	}
+
+	#[test]
+	fn signal_target_rejects_pids_that_would_hit_the_wrong_processes() {
+		assert_eq!(signal_target(0, false), None);
+		assert_eq!(signal_target(0, true), None);
+		assert_eq!(signal_target(u32::MAX, false), None);
+		assert_eq!(signal_target(i32::MAX as u32 + 1, true), None);
+		assert_eq!(signal_target(4242, false), Some(4242));
+		assert_eq!(signal_target(4242, true), Some(-4242));
 	}
 
 	#[test]
