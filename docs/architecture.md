@@ -7,9 +7,9 @@ A contributor-facing overview of how Quay is built.
 ```
 +---------------------------+      commands (invoke)       +--------------------------+
 |   Frontend (webview)      | ---------------------------> |       Rust core          |
-|   vanilla TS popover UI   | <--------------------------- |  supervisor, health,     |
-|   list / row / form /     |     events (status push)     |  store, brew, terminal,  |
-|   settings                |                              |  detect, state, commands |
+|   React + TypeScript UI   | <--------------------------- |  supervisor, health,     |
+|   Popup / ServiceRow /    |     events (status push)     |  store, brew, terminal,  |
+|   ServiceForm / Settings  |                              |  detect, state, commands |
 +---------------------------+                              +--------------------------+
                                                                       |
                                    spawn / signal · osascript · brew · fs · TCP/HTTP
@@ -17,7 +17,7 @@ A contributor-facing overview of how Quay is built.
                        child processes · Terminal.app/iTerm · brew services · config & logs
 ```
 
-It's a **Tauri v2** app. The **Rust core** owns all process supervision and state; the **frontend** is a small vanilla-TypeScript single-page app rendered in a frameless, always-on-top webview window anchored under the menubar tray icon. The two communicate only through Tauri's IPC:
+It's a **Tauri v2** app. The **Rust core** owns all process supervision and state; the **frontend** is a React + TypeScript single-page app rendered in a frameless, always-on-top webview window anchored under the menubar tray icon. The two communicate only through Tauri's IPC:
 
 - **Commands** — frontend calls Rust (`invoke('start_item', { id })`), request/response.
 - **Events** — Rust pushes to the frontend (`status_changed`), so the UI never polls.
@@ -48,11 +48,18 @@ Each module has a single responsibility:
 |------|----------------|
 | `ipc.ts` | Typed wrappers over `invoke`/`listen`. The single place IPC names live on the frontend. |
 | `model.ts` | TypeScript mirrors of the Rust types (camelCase) + pure helpers (`statusDot`, `matchesSearch`, `splitFavorites`), unit-tested. |
-| `list.ts` | Renders the two-tier list (favorites + collapsible "More"), the search box, and Stop-all. |
-| `row.ts` | Renders one item: status dot, action buttons, and the expand panel (log tail, edit, delete, favorite, auto-start). |
-| `form.ts` | The add/edit modal: folder picker → detect prefill → all fields → save. |
-| `settings.ts` | The settings modal + launch-at-login toggle. |
-| `main.ts` | Bootstraps: loads items, renders, subscribes to `status_changed`, and re-renders on updates. |
+| `main.tsx` | Mounts `App` with React DOM and imports fonts and `index.css`. |
+| `App.tsx` | Owns items, status/error maps, metrics, discovered ports/agents, updates, and dialog state. Subscribes to backend events through `ipc.ts` and cleans up listeners on unmount. |
+| `components/Popup.tsx` | Renders search, favorites, groups, service controls, and radar sections. Wires drag-to-reorder within each list to the `reorder` command. |
+| `components/ServiceRow.tsx` | Renders a service's status, metrics, action buttons, and expandable log tail. |
+| `components/ServiceForm.tsx` | The add/edit dialog: folder picker, detection prefill, service fields, and save. |
+| `components/SettingsDialog.tsx` | Settings, launch-at-login, terminal selection, and agent hook installation. |
+| `components/DetectedRow.tsx` / `AgentRow.tsx` | Actions for discovered listeners and coding-agent sessions. |
+| `components/UpdateBanner.tsx` | Shows an available update and starts installation. |
+| `components/ui/` | Shared Radix/shadcn UI primitives. |
+| `lib/` | Environment parsing, Docker daemon prompts, and styling helpers. |
+
+The entry path is `index.html` → `src/main.tsx` → `App.tsx`. `App` passes state and callbacks to the components; backend events update that state and React re-renders the affected UI. Tailwind styles and theme variables live in `src/index.css`.
 
 ## Key flows
 
@@ -205,7 +212,7 @@ Quitting via the tray's **Quit** menu item drains the running map and stops each
 ## Security posture
 
 - `osascript` command lines are built with correct shell single-quote escaping and AppleScript string escaping, so real folders/commands with spaces or quotes work. These run **your own** configured commands, not untrusted input.
-- The frontend sets all process/user-supplied text via `textContent`, never `innerHTML` interpolation.
+- The frontend renders process/user-supplied strings as React text children rather than interpolating them into HTML.
 - Tauri capabilities (`src-tauri/capabilities/default.json`) grant only `dialog:allow-open` and the three `autostart` permissions beyond `core:default`.
 - `config.json`'s `env` map is plain text and meant for dev variables, not secrets.
 
@@ -213,7 +220,6 @@ Quitting via the tray's **Quit** menu item drains the running map and stops each
 
 Honest gaps (see the spec's non-goals and the README's limitations):
 
-- Drag-to-reorder in the UI (the `reorder` command exists; the gesture isn't wired).
 - Aggregate tray-icon color tint.
 - Streaming logs (the UI tails the log file on expand instead).
 - Richer error surfacing beyond the dot tooltip + log tail.
