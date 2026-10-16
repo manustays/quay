@@ -17,7 +17,7 @@ pub mod terminal;
 
 use tauri::{
 	Emitter, Manager,
-	menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem},
+	menu::{MenuBuilder, MenuItemBuilder, PredefinedMenuItem, SubmenuBuilder},
 	tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
 	WindowEvent,
 };
@@ -664,6 +664,22 @@ fn resize_popover(app: tauri::AppHandle, height: f64) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
 	tauri::Builder::default()
+		// Replace Tauri's default macOS app menu: its "Quit Quay" ⌘Q fires whenever the
+		// popover is key, so a stray ⌘Q meant for another app quit Quay. Keep only the
+		// Edit items — WebKit text fields get ⌘C/⌘V/⌘X/⌘Z/⌘A through them. The menu is
+		// never shown (Accessory policy), so one untitled-looking submenu is enough.
+		.menu(|app| {
+			let edit = SubmenuBuilder::new(app, "Edit")
+				.undo()
+				.redo()
+				.separator()
+				.cut()
+				.copy()
+				.paste()
+				.select_all()
+				.build()?;
+			MenuBuilder::new(app).item(&edit).build()
+		})
 		.plugin(tauri_plugin_dialog::init())
 		.plugin(tauri_plugin_positioner::init())
 		.plugin(tauri_plugin_autostart::init(tauri_plugin_autostart::MacosLauncher::LaunchAgent, None))

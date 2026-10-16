@@ -14,7 +14,7 @@ Thanks for your interest in improving this project. This guide covers how to get
 You'll need:
 
 - **Rust** (stable) via [rustup](https://rustup.rs) — `cargo` and `rustc` on your `PATH`.
-- **Node.js 18+** and **npm**.
+- **Node.js 22.14+ (22.x)** and **npm**, matching the Node 22 release workflow.
 - **Xcode Command Line Tools** — `xcode-select --install`.
 
 Then:
@@ -22,7 +22,7 @@ Then:
 ```bash
 git clone https://github.com/manustays/quay.git
 cd quay
-npm install
+npm ci
 npm run tauri dev      # launches the app in development mode
 ```
 
@@ -78,7 +78,7 @@ Guidelines:
 ## Security-sensitive areas
 
 - `src-tauri/src/terminal.rs` builds shell lines passed to `osascript`. Keep the single-quote and AppleScript escaping intact.
-- The frontend must use `textContent` (not `innerHTML`) for any process- or user-supplied string.
+- Render process- or user-supplied strings as React text children; do not use HTML interpolation or `dangerouslySetInnerHTML`.
 - Tauri capabilities (`src-tauri/capabilities/default.json`) should grant only what's needed.
 
 ## Project documentation
