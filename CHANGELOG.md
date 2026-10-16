@@ -1,3 +1,49 @@
+# [0.21.0](https://github.com/manustays/quay/compare/v0.20.0...v0.21.0) (2026-09-19)
+
+
+### Features
+
+* **popover:** open the website or release notes from the title bar ([b2bd664](https://github.com/manustays/quay/commit/b2bd6646ea11866923013eb3efae79c754d1357c))
+
+# [0.20.0](https://github.com/manustays/quay/compare/v0.19.0...v0.20.0) (2026-09-19)
+
+
+### Bug Fixes
+
+* **agent-radar:** stop false waiting badges and premature idle rows ([a8f6b5e](https://github.com/manustays/quay/commit/a8f6b5e1e7aed20e46638125bf1102ae3bfb4800))
+* **hooks:** match agents installed under a versioned path ([1fb2860](https://github.com/manustays/quay/commit/1fb2860464386cf679b99b3018b56616c04f938c))
+
+
+### Features
+
+* **hooks:** give OpenCode and Pi full session lifecycle coverage ([f05ee4f](https://github.com/manustays/quay/commit/f05ee4f2d84c4a7846ee77a11453b7418a868137))
+* **hooks:** see Claude sessions before their first prompt ([89ff21a](https://github.com/manustays/quay/commit/89ff21ac676d56880ca4414e17845ccd51be526f))
+* **hooks:** stamp process identity into agent state files ([f72d5ec](https://github.com/manustays/quay/commit/f72d5ec018b4249a63a2651d78c7dc1603c65ca6))
+* **hooks:** track Codex session start and end ([620b65c](https://github.com/manustays/quay/commit/620b65cd54a1af22190dfe1f1bcafe8c477dffa7))
+* **ui:** explain an empty agent list instead of hiding it ([62993c2](https://github.com/manustays/quay/commit/62993c2ceb67e44ecd1a9463de35147287d5e0a9))
+
+
+### Performance Improvements
+
+* **agent-radar:** discover sessions from hook files, not a process scan ([57cd2a9](https://github.com/manustays/quay/commit/57cd2a90a01b62364cbdf0bc7c6d2aba2cb86419))
+* **agent-radar:** drop the ps fork from the waiting-badge sweep ([392edbd](https://github.com/manustays/quay/commit/392edbdc7527477250930db0630b83b06fcfec90))
+* **agent-radar:** stop a stale legacy file costing 12x idle CPU ([abffb85](https://github.com/manustays/quay/commit/abffb85505e042918a2fab3ba0d4a13bfc81e1ca))
+* park all polling while screens sleep or the Mac is locked ([986980a](https://github.com/manustays/quay/commit/986980a9b5ab29038123ba8f0effdebcc2f45e66))
+* **scripts:** measure the renderer too, document the numbers ([97ea648](https://github.com/manustays/quay/commit/97ea6484699619ee32c9038aed5008c777ba2786))
+
+# [0.19.0](https://github.com/manustays/quay/compare/v0.18.0...v0.19.0) (2026-09-17)
+
+
+### Bug Fixes
+
+* **macos:** restore tray popover on macOS 27 ([6353955](https://github.com/manustays/quay/commit/6353955bf9bd951b9d3a8e7b38f03017566301c1)), closes [tauri-apps/tray-icon#365](https://github.com/tauri-apps/tray-icon/issues/365)
+
+
+### Features
+
+* add agent-interval setting, cut background CPU use ([f649905](https://github.com/manustays/quay/commit/f6499056d50a9faef70ed471d7cf1445d8f9d7b4))
+* **settings:** add toggle to turn agent tracking off ([df71c2d](https://github.com/manustays/quay/commit/df71c2d30a5a6e301eed1427c8d3f7de4c8636f1))
+
 # [0.18.0](https://github.com/manustays/quay/compare/v0.17.0...v0.18.0) (2026-09-15)
 
 
