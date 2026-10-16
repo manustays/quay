@@ -1,16 +1,17 @@
 /**
  * Parse "KEY=VALUE" lines into an env record.
  * Lines without an `=` are silently skipped.
+ * Names are trimmed; values keep their whitespace. Accepts LF and CRLF lines.
  *
  * @param text - Multi-line string where each line is `KEY=VALUE`.
  * @returns Record mapping env var names to values.
  */
 export function parseEnv(text: string): Record<string, string> {
 	const env: Record<string, string> = {};
-	for (const line of text.split('\n')) {
+	for (const line of text.split(/\r?\n/)) {
 		const i = line.indexOf('=');
 		if (i > 0) {
-			env[line.slice(0, i).trim()] = line.slice(i + 1).trim();
+			env[line.slice(0, i).trim()] = line.slice(i + 1);
 		}
 	}
 	return env;
