@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
 	ArrowUpRight,
 	FolderOpen,
@@ -99,6 +99,9 @@ export function ServiceRow({
 }: ServiceRowProps): React.JSX.Element {
 	const [log, setLog] = useState<string>('');
 	const [copied, setCopied] = useState(false);
+	const copying = useRef(false);
+	const copyTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+	useEffect(() => () => clearTimeout(copyTimer.current), []);
 	// Gate `draggable` on the handle so only the grip starts a drag, not the whole row.
 	const [grabbing, setGrabbing] = useState(false);
 	const running = status === 'running' || status === 'starting';
@@ -108,11 +111,21 @@ export function ServiceRow({
 		if (next) setLog(await tailLog(item.id, 20).catch(() => ''));
 	};
 
-	/** Copy the service URL and flash the "copied!" label. */
-	const copyUrl = () => {
-		void navigator.clipboard.writeText(browserUrlFor(item));
-		setCopied(true);
-		setTimeout(() => setCopied(false), 1000);
+	/** Show success only after the clipboard write completes; allow retry on failure. */
+	const copyUrl = async () => {
+		if (copying.current) return;
+		copying.current = true;
+		clearTimeout(copyTimer.current);
+		setCopied(false);
+		try {
+			await navigator.clipboard.writeText(browserUrlFor(item));
+			setCopied(true);
+			copyTimer.current = setTimeout(() => setCopied(false), 1000);
+		} catch (err) {
+			alert(`Could not copy URL: ${String(err)}`);
+		} finally {
+			copying.current = false;
+		}
 	};
 
 	/** Run an ipc action, surface errors, then refresh. */
